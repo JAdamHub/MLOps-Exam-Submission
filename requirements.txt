@@ -1,0 +1,8 @@
+pandas>=1.5.0
+requests>=2.28.0
+scikit-learn>=1.1.0
+fastapi>=0.85.0
+uvicorn[standard]>=0.18.0
+python-dotenv>=0.20.0 # For potential API keys or config
+joblib>=1.2.0 # For saving/loading models/scalers
+numpy<2.0 # Add constraint for compatibility
