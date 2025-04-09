@@ -1,5 +1,5 @@
 # Brug samme base image som API'en
-FROM python:3.10-slim
+FROM python:3.12-slim
 
 # Sæt miljøvariabler
 ENV PYTHONDONTWRITEBYTECODE 1

@@ -167,6 +167,14 @@ async def predict(features: InputFeatures):
         # Konverter input features til dictionary
         feature_dict = features.dict()
         
+        # Tjek om alle nødvendige features er til stede
+        missing_features = [feat for feat in expected_features if feat not in feature_dict]
+        if missing_features:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Missing required features: {', '.join(missing_features)}"
+            )
+            
         # Opret feature array i korrekt rækkefølge
         feature_array = np.array([feature_dict[feature] for feature in expected_features]).reshape(1, -1)
         
@@ -185,8 +193,9 @@ async def predict(features: InputFeatures):
             except Exception as drift_e:
                 logger.warning(f"Failed to run drift detection: {drift_e}")
         
-        # Skaler features
-        scaled_features = scaler.transform(feature_array)
+        # Skaler features - dette spring vi over da input allerede er skaleret
+        # scaled_features = scaler.transform(feature_array)
+        scaled_features = feature_array
         
         # Lav prædiktion
         prediction = model.predict(scaled_features)[0]
@@ -198,19 +207,21 @@ async def predict(features: InputFeatures):
                 prediction=prediction,
                 actual_value=None,  # Vi kender ikke den faktiske værdi endnu
                 features_used=feature_dict,
-                model_version="1.0"  # Dette bør hentes fra model metadata
+                prediction_time=datetime.now()
             )
+            logger.info(f"Prediction stored: {prediction} with probability {prediction_proba[1]:.4f}")
         
-        return PredictionResponse(
-            prediction=int(prediction),
-            probability=float(prediction_proba[1]),
-            timestamp=datetime.now().isoformat(),
-            features_used=expected_features
-        )
+        # Returner resultatet
+        return {
+            "prediction": int(prediction),
+            "probability": float(prediction_proba[1]), # Probability of class 1 (price up)
+            "timestamp": datetime.now().isoformat(),
+            "features_used": list(expected_features)
+        }
         
     except Exception as e:
-        logger.error(f"Error making prediction: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error making prediction: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error making prediction: {str(e)}")
 
 @app.get("/health")
 async def health_check():

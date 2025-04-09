@@ -6,6 +6,19 @@ import requests
 import json
 import joblib
 import os
+import sys
+from pathlib import Path
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+
+# Tilføj import sti-justeringer for at kunne køre både fra rod og fra src/streamlit
+current_dir = Path(__file__).parent.absolute()
+if current_dir.name == 'streamlit':
+    # Vi er i src/streamlit, så importer monitoring direkte
+    import_path = "monitoring"
+else:
+    # Vi er et andet sted, så brug absolut import
+    import_path = "src.streamlit.monitoring"
 
 # API URL configuration - default for local dev, overridden by environment variable in Docker
 API_URL = os.environ.get('API_URL', 'http://localhost:8000')
@@ -30,18 +43,29 @@ page = st.sidebar.radio("Go to", ["Prediction", "Monitoring"])
 
 if page == "Monitoring":
     # Import og vis monitoring-siden
-    import src.streamlit.monitoring as monitoring
-    # Denne import vil køre monitoring-siden
-    st.stop()  # Stop denne side for at undgå dobbelt rendering
+    try:
+        if import_path == "monitoring":
+            import monitoring as monitoring
+        else:
+            import src.streamlit.monitoring as monitoring
+        # Denne import vil køre monitoring-siden
+        st.stop()  # Stop denne side for at undgå dobbelt rendering
+    except ImportError as e:
+        st.error(f"Kunne ikke importere monitoring modul: {e}")
+        st.error("Streamlit skal køres fra projektets rodmappe med: streamlit run src/streamlit/app.py")
+        st.stop()
     
 # Resten af koden køres kun hvis vi er på Prediction-siden
 
-# Load scaler at startup
+# Load feature names and scaler at startup
 try:
     scaler = joblib.load('models/scaler.joblib')
+    feature_names = joblib.load('models/feature_names.joblib')
+    st.success(f"Indlæste {len(feature_names)} features fra model")
 except Exception as e:
-    st.error(f"Kunne ikke indlæse scaler: {e}")
+    st.error(f"Kunne ikke indlæse scaler eller feature_names: {e}")
     scaler = None
+    feature_names = []
 
 # Function to get latest data
 def get_latest_data():
@@ -57,99 +81,43 @@ def get_latest_data():
 def make_prediction(data):
     """Make prediction using the API."""
     try:
-        # Valider input data
-        required_features = [
-            'price', 'market_cap', 'total_volume',
-            'price_lag_1', 'price_lag_3', 'price_lag_7',
-            'price_sma_7', 'price_sma_30',
-            'price_volatility_14', 'day_of_week', 'month', 'year',
-            'rsi_14', 'rsi_7', 'rsi_21',
-            'macd', 'macd_signal', 'macd_histogram',
-            'macd_fast', 'macd_signal_fast',
-            'bb_upper', 'bb_middle', 'bb_lower',
-            'bb_width', 'bb_position',
-            'volume_sma_7', 'volume_sma_30',
-            'volume_ratio', 'volume_ratio_30',
-            'volume_momentum',
-            'price_momentum_1', 'price_momentum_7',
-            'price_momentum_30', 'price_momentum_90',
-            'volatility_7', 'volatility_14', 'volatility_30',
-            'market_cap_to_volume',
-            'market_cap_momentum_1', 'market_cap_momentum_7',
-            'market_cap_momentum_30',
-            'volume_to_market_cap',
-            'price_volatility_ratio',
-            'momentum_volatility_ratio',
-            'volume_price_ratio',
-            'day_of_month',
-            'is_weekend'
-        ]
-        
         # Check for missing features
-        missing_features = [feat for feat in required_features if feat not in data]
+        missing_features = [feat for feat in feature_names if feat not in data]
         if missing_features:
             st.error(f"Manglende features: {', '.join(missing_features)}")
             return None
             
-        # Forbered data til API kald
-        prediction_data = {
-            'price': float(data['price']),
-            'market_cap': float(data['market_cap']),
-            'total_volume': float(data['total_volume']),
-            'price_lag_1': float(data['price_lag_1']),
-            'price_lag_3': float(data['price_lag_3']),
-            'price_lag_7': float(data['price_lag_7']),
-            'price_sma_7': float(data['price_sma_7']),
-            'price_sma_30': float(data['price_sma_30']),
-            'price_volatility_14': float(data['price_volatility_14']),
-            'day_of_week': int(data['day_of_week']),
-            'month': int(data['month']),
-            'year': int(data['year']),
-            'rsi_14': float(data['rsi_14']),
-            'rsi_7': float(data['rsi_7']),
-            'rsi_21': float(data['rsi_21']),
-            'macd': float(data['macd']),
-            'macd_signal': float(data['macd_signal']),
-            'macd_histogram': float(data['macd_histogram']),
-            'macd_fast': float(data['macd_fast']),
-            'macd_signal_fast': float(data['macd_signal_fast']),
-            'bb_upper': float(data['bb_upper']),
-            'bb_middle': float(data['bb_middle']),
-            'bb_lower': float(data['bb_lower']),
-            'bb_width': float(data['bb_width']),
-            'bb_position': float(data['bb_position']),
-            'volume_sma_7': float(data['volume_sma_7']),
-            'volume_sma_30': float(data['volume_sma_30']),
-            'volume_ratio': float(data['volume_ratio']),
-            'volume_ratio_30': float(data['volume_ratio_30']),
-            'volume_momentum': float(data['volume_momentum']),
-            'price_momentum_1': float(data['price_momentum_1']),
-            'price_momentum_7': float(data['price_momentum_7']),
-            'price_momentum_30': float(data['price_momentum_30']),
-            'price_momentum_90': float(data['price_momentum_90']),
-            'volatility_7': float(data['volatility_7']),
-            'volatility_14': float(data['volatility_14']),
-            'volatility_30': float(data['volatility_30']),
-            'market_cap_to_volume': float(data['market_cap_to_volume']),
-            'market_cap_momentum_1': float(data['market_cap_momentum_1']),
-            'market_cap_momentum_7': float(data['market_cap_momentum_7']),
-            'market_cap_momentum_30': float(data['market_cap_momentum_30']),
-            'volume_to_market_cap': float(data['volume_to_market_cap']),
-            'price_volatility_ratio': float(data['price_volatility_ratio']),
-            'momentum_volatility_ratio': float(data['momentum_volatility_ratio']),
-            'volume_price_ratio': float(data['volume_price_ratio']),
-            'day_of_month': int(data['day_of_month']),
-            'is_weekend': int(data['is_weekend'])
-        }
+        # Forbered data til API kald - kun features som modellen bruger
+        prediction_data = {}
+        for feature in feature_names:
+            if feature in data:
+                # Konverter værdien til korrekt type (int eller float)
+                if feature in ['day_of_week', 'month', 'year', 'day_of_month', 'is_weekend']:
+                    prediction_data[feature] = int(data[feature])
+                else:
+                    prediction_data[feature] = float(data[feature])
         
         # Send request til API - brug API_URL miljøvariabel
         api_endpoint = f"{API_URL}/predict"
         st.info(f"Sender anmodning til API: {api_endpoint}")
         
-        response = requests.post(
+        # Tilføj timeout og retry_strategy
+        retry_strategy = Retry(
+            total=3,
+            backoff_factor=0.5,
+            status_forcelist=[429, 500, 502, 503, 504],
+        )
+        adapter = HTTPAdapter(max_retries=retry_strategy)
+        session = requests.Session()
+        session.mount("http://", adapter)
+        session.mount("https://", adapter)
+        
+        # Brug session med timeout og retry
+        response = session.post(
             api_endpoint,
             json=prediction_data,
-            headers={"Content-Type": "application/json"}
+            headers={"Content-Type": "application/json"},
+            timeout=10  # 10 sekunder timeout
         )
         
         if response.status_code == 200:
@@ -167,6 +135,7 @@ def make_prediction(data):
             
     except requests.exceptions.RequestException as e:
         st.error(f"Netværksfejl: {str(e)}")
+        st.error(f"API URL: {API_URL} - Check venligst om API'en kører på denne adresse")
         return None
     except Exception as e:
         st.error(f"Uventet fejl: {str(e)}")
