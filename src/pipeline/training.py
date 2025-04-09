@@ -4,7 +4,7 @@ import joblib
 import logging
 from pathlib import Path
 from sklearn.model_selection import TimeSeriesSplit, RandomizedSearchCV, train_test_split
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score, confusion_matrix, matthews_corrcoef
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score, confusion_matrix, matthews_corrcoef, mean_squared_error, mean_absolute_error, r2_score
 from sklearn.preprocessing import StandardScaler
 from sklearn.feature_selection import SelectFromModel
 import xgboost as xgb
@@ -22,6 +22,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PROCESSED_FEATURES_DIR = PROJECT_ROOT / "data" / "features"
 MODELS_DIR = PROJECT_ROOT / "models"
 FIGURES_DIR = MODELS_DIR / "figures"
+
+# Forecast horizons (matchende dem i feature_engineering.py)
+FORECAST_HORIZONS = [1, 3, 7]  # Forudsig prisen 1, 3 og 7 dage frem
 
 # Ensure directories exist
 MODELS_DIR.mkdir(parents=True, exist_ok=True)
@@ -75,25 +78,38 @@ def prepare_data(df):
             median_val = df[col].median()
             df[col] = df[col].fillna(median_val)
     
-    # Separate features and target
-    if 'target_price_up' not in df.columns:
-        raise ValueError("Target column 'target_price_up' not found in data")
+    # Identificer target kolonner baseret på navne
+    target_columns = [f'price_target_{horizon}d' for horizon in FORECAST_HORIZONS]
+    missing_targets = [col for col in target_columns if col not in df.columns]
     
-    feature_columns = [col for col in df.columns if col != 'target_price_up']
-    X = df[feature_columns].values  # Convert to numpy array after selecting features
-    y = df['target_price_up'].values
+    if missing_targets:
+        logging.error(f"Missing target columns: {missing_targets}")
+        raise ValueError(f"Target columns {missing_targets} not found in data")
+    
+    # Separate features and targets
+    feature_columns = [col for col in df.columns if col not in target_columns]
+    X = df[feature_columns].values
+    
+    # Create dictionary of targets for different horizons
+    y_dict = {}
+    for target_col in target_columns:
+        y_dict[target_col] = df[target_col].values
     
     # Scale features
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
     
-    logging.info(f"Prepared {X_scaled.shape[1]} features for training")
+    logging.info(f"Prepared {X_scaled.shape[1]} features and {len(target_columns)} targets for training")
     
-    return X_scaled, y, feature_columns, scaler
+    return X_scaled, y_dict, feature_columns, target_columns, scaler
 
-def select_features(X, y, feature_columns, importance_threshold=0.005):
+def select_features(X, y_dict, feature_columns, importance_threshold=0.005):
     """Select important features based on cross-validated feature importance."""
-    logging.info("Performing advanced feature selection with cross-validation...")
+    logging.info("Performing feature selection for regression models...")
+    
+    # Vi bruger den første target (1-dag) til feature selection
+    target_1d_key = f'price_target_1d'
+    y = y_dict[target_1d_key]
     
     # Opret TimeSeriesSplit for krydsvalidering
     tscv = TimeSeriesSplit(n_splits=5)
@@ -109,11 +125,12 @@ def select_features(X, y, feature_columns, importance_threshold=0.005):
         
         logging.info(f"Training feature selection model - fold {fold}/5...")
         
-        # Træn model på hvert fold
-        model = xgb.XGBClassifier(
+        # Træn regression model på hvert fold
+        model = xgb.XGBRegressor(
             n_estimators=300,
             learning_rate=0.05, 
             max_depth=5,
+            objective='reg:squarederror',
             random_state=42
         )
         model.fit(X_train, y_train)
@@ -134,9 +151,9 @@ def select_features(X, y, feature_columns, importance_threshold=0.005):
     # Plot top 20 feature importances
     plt.figure(figsize=(12, 10))
     sns.barplot(x='Importance', y='Feature', data=feature_importance_df.head(20))
-    plt.title('Top 20 Feature Importances (Cross-Validated)')
+    plt.title('Top 20 Feature Importances for Regression (Cross-Validated)')
     plt.tight_layout()
-    plt.savefig(FIGURES_DIR / 'feature_importances_selection.png')
+    plt.savefig(FIGURES_DIR / 'feature_importances_regression.png')
     
     # Vælg features baseret på importance threshold
     selected_indices = feature_importances >= importance_threshold
@@ -158,341 +175,218 @@ def select_features(X, y, feature_columns, importance_threshold=0.005):
     
     return X_selected, selected_features
 
-def hyperparameter_tuning(X, y):
-    """Perform extensive hyperparameter tuning using manual cross-validation."""
-    logging.info("Starting extensive hyperparameter tuning...")
+def hyperparameter_tuning(X, y_dict):
+    """Perform hyperparameter tuning for regression models."""
+    logging.info("Starting hyperparameter tuning for regression...")
+    
+    # Vi bruger den første target (1-dag) til hyperparameter tuning
+    target_1d_key = f'price_target_1d'
+    y = y_dict[target_1d_key]
     
     # Define time series cross-validation
     tscv = TimeSeriesSplit(n_splits=5)
     
-    # Define more comprehensive parameter combinations
-    param_combinations = [
-        # Baseline configuration
-        {
-            'n_estimators': 100,
-            'max_depth': 3,
-            'learning_rate': 0.1,
-            'subsample': 0.8,
-            'colsample_bytree': 0.8,
-            'min_child_weight': 1,
-            'gamma': 0.0,
-            'reg_alpha': 0,
-            'reg_lambda': 1
-        },
-        # Høj kompleksitet, lav læringsrate
-        {
-            'n_estimators': 500,
-            'max_depth': 8,
-            'learning_rate': 0.01,
-            'subsample': 0.8,
-            'colsample_bytree': 0.7,
-            'min_child_weight': 2,
-            'gamma': 0.1,
-            'reg_alpha': 0.1,
-            'reg_lambda': 1.0
-        },
-        # Medium kompleksitet, medium læringsrate
-        {
-            'n_estimators': 300,
-            'max_depth': 5,
-            'learning_rate': 0.05,
-            'subsample': 0.7,
-            'colsample_bytree': 0.7,
-            'min_child_weight': 2,
-            'gamma': 0.05,
-            'reg_alpha': 0.05,
-            'reg_lambda': 0.8
-        },
-        # Lav kompleksitet, høj læringsrate
-        {
-            'n_estimators': 200,
-            'max_depth': 4,
-            'learning_rate': 0.1,
-            'subsample': 0.9,
-            'colsample_bytree': 0.9,
-            'min_child_weight': 1,
-            'gamma': 0.0,
-            'reg_alpha': 0.01,
-            'reg_lambda': 0.5
-        },
-        # Høj kompleksitet, høj læringsrate
-        {
-            'n_estimators': 400,
-            'max_depth': 7,
-            'learning_rate': 0.08,
-            'subsample': 0.8,
-            'colsample_bytree': 0.8,
-            'min_child_weight': 3,
-            'gamma': 0.2,
-            'reg_alpha': 0.2,
-            'reg_lambda': 1.2
-        },
-        # Maksimal kompleksitet, lav læringsrate
-        {
-            'n_estimators': 800,
-            'max_depth': 10,
-            'learning_rate': 0.01,
-            'subsample': 0.8,
-            'colsample_bytree': 0.8,
-            'min_child_weight': 3,
-            'gamma': 0.3,
-            'reg_alpha': 0.3,
-            'reg_lambda': 1.5
-        },
-        # Mellemkompleksitet, fokus på feature sampling
-        {
-            'n_estimators': 300,
-            'max_depth': 6,
-            'learning_rate': 0.05,
-            'subsample': 0.6,
-            'colsample_bytree': 0.6,
-            'min_child_weight': 2,
-            'gamma': 0.1,
-            'reg_alpha': 0.1,
-            'reg_lambda': 1.0
-        },
-        # Meget høj regularisering
-        {
-            'n_estimators': 400,
-            'max_depth': 5,
-            'learning_rate': 0.03,
-            'subsample': 0.7,
-            'colsample_bytree': 0.7,
-            'min_child_weight': 4,
-            'gamma': 0.3,
-            'reg_alpha': 0.5,
-            'reg_lambda': 2.0
-        }
-    ]
+    # Define parameter grid for regression
+    param_grid = {
+        'n_estimators': [100, 300, 500],
+        'learning_rate': [0.01, 0.05, 0.1],
+        'max_depth': [3, 5, 7],
+        'subsample': [0.7, 0.8, 0.9],
+        'colsample_bytree': [0.7, 0.8, 0.9],
+        'min_child_weight': [1, 3, 5],
+        'gamma': [0, 0.1, 0.2],
+        'reg_alpha': [0, 0.1, 0.5],
+        'reg_lambda': [0.5, 1, 1.5]
+    }
     
-    best_score = 0
-    best_params = None
+    # Perform randomized search with time series CV
+    model = xgb.XGBRegressor(
+        objective='reg:squarederror',
+        random_state=42
+    )
     
-    for params in param_combinations:
-        logging.info(f"Evaluating parameters: {params}")
-        scores = []
-        
-        # Perform cross-validation
-        for train_idx, val_idx in tscv.split(X):
-            X_train, X_val = X[train_idx], X[val_idx]
-            y_train, y_val = y[train_idx], y[val_idx]
-            
-            # Train model with current parameters
-            model = xgb.XGBClassifier(**params, random_state=42)
-            model.fit(X_train, y_train)
-            
-            # Predict and evaluate
-            y_pred_proba = model.predict_proba(X_val)[:, 1]
-            score = roc_auc_score(y_val, y_pred_proba)
-            scores.append(score)
-        
-        # Calculate average score
-        avg_score = np.mean(scores)
-        logging.info(f"Average ROC AUC: {avg_score:.4f}")
-        
-        # Update best parameters if better score
-        if avg_score > best_score:
-            best_score = avg_score
-            best_params = params
+    # Randomized search for best parameters
+    random_search = RandomizedSearchCV(
+        estimator=model,
+        param_distributions=param_grid,
+        n_iter=20,  # Antal tilfældige kombinationer
+        scoring='neg_mean_squared_error',
+        cv=tscv,
+        verbose=1,
+        random_state=42,
+        n_jobs=-1
+    )
     
+    # Fit the random search
+    logging.info("Fitting randomized search for hyperparameters...")
+    random_search.fit(X, y)
+    
+    # Get best parameters
+    best_params = random_search.best_params_
     logging.info(f"Best parameters found: {best_params}")
-    logging.info(f"Best ROC AUC score: {best_score:.4f}")
+    
+    # Plot feature importances from the best model
+    feature_importances = random_search.best_estimator_.feature_importances_
+    
+    # Create a temp dataframe for plotting
+    temp_df = pd.DataFrame({
+        'Feature': range(X.shape[1]),
+        'Importance': feature_importances
+    }).sort_values(by='Importance', ascending=False)
+    
+    plt.figure(figsize=(12, 8))
+    sns.barplot(x='Importance', y='Feature', data=temp_df.head(20))
+    plt.title('Top 20 Feature Importances (Tuned Model)')
+    plt.tight_layout()
+    plt.savefig(FIGURES_DIR / 'feature_importances_tuned.png')
     
     return best_params
 
-def train_model(X, y, feature_names, best_params=None):
-    """
-    Train XGBoost model with time series cross-validation
-    """
-    tscv = TimeSeriesSplit(n_splits=10)  # Øget fra 5 til 10 folds
+def train_model(X, y_dict, feature_names, target_columns, best_params=None):
+    """Train regression models for multiple horizons."""
+    logging.info("Starting model training for multiple forecast horizons...")
     
-    # Check for class imbalance
-    class_counts = np.bincount(y)
-    total = len(y)
-    class_ratio = class_counts[1] / total if len(class_counts) > 1 else 0.5
-    is_imbalanced = abs(class_ratio - 0.5) > 0.1  # If more than 10% off from balanced
+    # Define time series cross-validation for evaluation
+    tscv = TimeSeriesSplit(n_splits=5)
     
-    if is_imbalanced:
-        # Calculate scale_pos_weight to handle class imbalance
-        scale_pos_weight = class_counts[0] / class_counts[1] if class_counts[1] > 0 else 1.0
-        logging.info(f"Class imbalance detected. Class ratio (positive): {class_ratio:.2f}. Setting scale_pos_weight to {scale_pos_weight:.2f}")
-    else:
-        scale_pos_weight = 1.0
-        logging.info(f"Classes are reasonably balanced. Class ratio (positive): {class_ratio:.2f}")
+    # Dict to store models for each horizon
+    models = {}
+    metrics = {}
+    feature_importances = {}
     
-    if best_params:
-        # Use provided parameters from hyperparameter tuning
-        model_params = best_params.copy()
-        # Ensure scale_pos_weight is set if needed
-        if is_imbalanced and 'scale_pos_weight' not in model_params:
-            model_params['scale_pos_weight'] = scale_pos_weight
+    # For each forecast horizon
+    for target_col in target_columns:
+        horizon = target_col.split('_')[-1].replace('d', '')  # Extract horizon from column name
+        y = y_dict[target_col]
         
-        # Øg antallet af estimators for mere robusthed
-        if 'n_estimators' in model_params:
-            model_params['n_estimators'] = max(model_params['n_estimators'], 500)
-        else:
-            model_params['n_estimators'] = 500
+        logging.info(f"Training model for {target_col} (horizon: {horizon} days)")
+        
+        # Initialize metrics
+        cv_scores = {
+            'rmse': [],
+            'mae': [],
+            'r2': []
+        }
+        
+        # Set parameters for model (use tuned if available)
+        params = best_params if best_params else {
+            'n_estimators': 300,
+            'learning_rate': 0.05,
+            'max_depth': 5,
+            'subsample': 0.8,
+            'colsample_bytree': 0.8,
+            'objective': 'reg:squarederror',
+            'random_state': 42
+        }
+        
+        # Dictionary to accumulate feature importances
+        importances = np.zeros(len(feature_names))
+        
+        # Train with cross-validation for evaluation
+        fold = 1
+        for train_idx, test_idx in tscv.split(X):
+            X_train, X_test = X[train_idx], X[test_idx]
+            y_train, y_test = y[train_idx], y[test_idx]
             
-        model = xgb.XGBClassifier(**model_params, random_state=42)
-        logging.info("Training model with tuned hyperparameters and increased estimators")
-    else:
-        # Default parameters with significant improvements for longer training
-        model = xgb.XGBClassifier(
-            n_estimators=800,             # Drastisk forøget fra 300
-            learning_rate=0.01,           # Reduceret for bedre præcision med flere træer
-            max_depth=8,                  # Øget fra 6
-            min_child_weight=2,
-            subsample=0.8,
-            colsample_bytree=0.8,
-            gamma=0.1,
-            scale_pos_weight=scale_pos_weight,
-            reg_alpha=0.1,                 # L1 regularization to reduce overfitting
-            reg_lambda=1.0,                # L2 regularization
-            random_state=42
-        )
-        logging.info("Training model with drastically improved default hyperparameters")
-    
-    cv_scores = {
-        'accuracy': [],
-        'precision': [],
-        'recall': [],
-        'f1': [],
-        'roc_auc': [],
-        'mcc': []  # Matthews Correlation Coefficient
-    }
-    
-    feature_importance = np.zeros(len(feature_names))
-    all_y_pred = []
-    all_y_true = []
-    
-    fold = 1
-    for train_idx, val_idx in tscv.split(X):
-        X_train, X_val = X[train_idx], X[val_idx]
-        y_train, y_val = y[train_idx], y[val_idx]
+            logging.info(f"Training {target_col} model - fold {fold}/5...")
+            
+            # Train model
+            model = xgb.XGBRegressor(**params)
+            model.fit(
+                X_train, 
+                y_train,
+                verbose=False
+            )
+            
+            # Make predictions
+            y_pred = model.predict(X_test)
+            
+            # Calculate metrics
+            rmse = np.sqrt(mean_squared_error(y_test, y_pred))
+            mae = mean_absolute_error(y_test, y_pred)
+            r2 = r2_score(y_test, y_pred)
+            
+            logging.info(f"Fold {fold} - RMSE: {rmse:.4f}, MAE: {mae:.4f}, R²: {r2:.4f}")
+            
+            # Accumulate metrics
+            cv_scores['rmse'].append(rmse)
+            cv_scores['mae'].append(mae)
+            cv_scores['r2'].append(r2)
+            
+            # Accumulate feature importances
+            importances += model.feature_importances_
+            
+            fold += 1
         
-        logging.info(f"Training fold {fold}/10...")
+        # Average feature importances
+        importances /= 5
+        feature_importance_dict = {name: float(imp) for name, imp in zip(feature_names, importances)}
         
-        # Train model with early stopping to prevent overfitting
-        eval_set = [(X_train, y_train), (X_val, y_val)]
-        model.fit(
-            X_train, 
-            y_train, 
-            eval_set=eval_set,
-            verbose=False
-        )
+        # Train final model on all data
+        final_model = xgb.XGBRegressor(**params)
+        final_model.fit(X, y)
         
-        # Log the best iteration number (early stopping point)
-        if hasattr(model, 'best_iteration'):
-            logging.info(f"Fold {fold} best iteration: {model.best_iteration}")
+        # Store model, metrics, and feature importances
+        models[target_col] = final_model
+        metrics[target_col] = cv_scores
+        feature_importances[target_col] = feature_importance_dict
         
-        y_pred = model.predict(X_val)
-        y_pred_proba = model.predict_proba(X_val)[:, 1]
+        # Log average metrics
+        avg_rmse = np.mean(cv_scores['rmse'])
+        avg_mae = np.mean(cv_scores['mae'])
+        avg_r2 = np.mean(cv_scores['r2'])
+        logging.info(f"Average metrics for {target_col} - RMSE: {avg_rmse:.4f}, MAE: {avg_mae:.4f}, R²: {avg_r2:.4f}")
         
-        all_y_pred.extend(y_pred)
-        all_y_true.extend(y_val)
+        # Plot feature importances for each horizon
+        top_features = pd.DataFrame(list(feature_importance_dict.items()), columns=['Feature', 'Importance'])
+        top_features = top_features.sort_values('Importance', ascending=False).head(20)
         
-        cv_scores['accuracy'].append(accuracy_score(y_val, y_pred))
-        cv_scores['precision'].append(precision_score(y_val, y_pred, zero_division=0))
-        cv_scores['recall'].append(recall_score(y_val, y_pred))
-        cv_scores['f1'].append(f1_score(y_val, y_pred))
-        cv_scores['roc_auc'].append(roc_auc_score(y_val, y_pred_proba))
-        cv_scores['mcc'].append(matthews_corrcoef(y_val, y_pred))
-        
-        # Accumulate feature importance
-        feature_importance += model.feature_importances_
-        fold += 1
+        plt.figure(figsize=(12, 10))
+        sns.barplot(x='Importance', y='Feature', data=top_features)
+        plt.title(f'Top Features for {target_col} Prediction')
+        plt.tight_layout()
+        plt.savefig(FIGURES_DIR / f'feature_importances_{horizon}d.png')
     
-    # Average feature importance across folds
-    feature_importance /= 10
-    
-    # Create feature importance dictionary
-    feature_importance_dict = dict(zip(feature_names, feature_importance))
-    
-    # Sort features by importance
-    sorted_features = sorted(feature_importance_dict.items(), key=lambda x: x[1], reverse=True)
-    
-    # Log top 10 most important features
-    logging.info("Top 10 most important features:")
-    for feature, importance in sorted_features[:10]:
-        logging.info(f"{feature}: {importance:.4f}")
-    
-    # Generate confusion matrix
-    conf_matrix = confusion_matrix(all_y_true, all_y_pred)
-    plt.figure(figsize=(8, 6))
-    sns.heatmap(conf_matrix, annot=True, fmt='d', cmap='Blues',
-               xticklabels=['Down', 'Up'],
-               yticklabels=['Down', 'Up'])
-    plt.title('Confusion Matrix')
-    plt.ylabel('True Label')
-    plt.xlabel('Predicted Label')
-    plt.tight_layout()
-    plt.savefig(FIGURES_DIR / 'confusion_matrix.png')
-    
-    # Train final model on all data with optimal configuration and early stopping
-    final_model = xgb.XGBClassifier(**model.get_params())
-    # Create a small validation set from the training data for early stopping
-    X_train_final, X_val_final, y_train_final, y_val_final = train_test_split(
-        X, y, test_size=0.2, random_state=42, stratify=y
-    )
-    eval_set = [(X_train_final, y_train_final), (X_val_final, y_val_final)]
-    final_model.fit(
-        X_train_final, 
-        y_train_final,
-        eval_set=eval_set,
-        verbose=False
-    )
-    logging.info(f"Final model best iteration: {final_model.best_iteration if hasattr(final_model, 'best_iteration') else 'N/A'}")
-    
-    # Generate feature importance plot
-    plt.figure(figsize=(10, 10))
-    sorted_idx = np.argsort(feature_importance)[-20:]  # Top 20 features
-    plt.barh(range(len(sorted_idx)), feature_importance[sorted_idx])
-    plt.yticks(range(len(sorted_idx)), [feature_names[i] for i in sorted_idx])
-    plt.title('Top 20 Feature Importance')
-    plt.tight_layout()
-    plt.savefig(FIGURES_DIR / 'feature_importance.png')
-    
-    return final_model, cv_scores, feature_importance_dict
+    return models, metrics, feature_importances
 
-def save_model(model, scaler, cv_scores, feature_importance, selected_features=None):
-    """Save model, scaler, and metrics."""
+def save_model(models, scaler, metrics, feature_importances, feature_names, target_columns):
+    """Save models, scaler, and metrics."""
     try:
-        # Save model
-        model_path = MODELS_DIR / "xgboost_model.joblib"
-        joblib.dump(model, model_path)
-        logging.info(f"Model saved successfully to {model_path}")
+        # Save individual models for each horizon
+        for target_col in target_columns:
+            horizon = target_col.split('_')[-1].replace('d', '')
+            model_path = MODELS_DIR / f"xgboost_model_{horizon}d.joblib"
+            joblib.dump(models[target_col], model_path)
+            logging.info(f"Model for {horizon}-day forecast saved to {model_path}")
         
         # Save scaler
         scaler_path = MODELS_DIR / "scaler.joblib"
         joblib.dump(scaler, scaler_path)
         logging.info(f"Scaler saved successfully to {scaler_path}")
         
-        # Save feature names for API
+        # Save feature names
         feature_names_path = MODELS_DIR / "feature_names.joblib"
-        feature_names = list(feature_importance.keys())
         joblib.dump(feature_names, feature_names_path)
         logging.info(f"Feature names saved successfully to {feature_names_path}")
         
-        # Konverter float32 til float for JSON serialisering
-        feature_importance_json = {k: float(v) for k, v in feature_importance.items()}
+        # Save target columns
+        target_columns_path = MODELS_DIR / "target_columns.joblib"
+        joblib.dump(target_columns, target_columns_path)
+        logging.info(f"Target columns saved successfully to {target_columns_path}")
         
-        # Calculate and save average metrics
-        metrics = {
-            'accuracy': np.mean(cv_scores['accuracy']),
-            'precision': np.mean(cv_scores['precision']),
-            'recall': np.mean(cv_scores['recall']),
-            'f1_score': np.mean(cv_scores['f1']),
-            'roc_auc': np.mean(cv_scores['roc_auc']),
-            'mcc': np.mean(cv_scores['mcc']),
-            'feature_importance': feature_importance_json,
+        # Calculate and save metrics
+        metrics_dict = {
+            'metrics': {target: {
+                'rmse': float(np.mean(metrics[target]['rmse'])),
+                'mae': float(np.mean(metrics[target]['mae'])),
+                'r2': float(np.mean(metrics[target]['r2']))
+            } for target in target_columns},
+            'feature_importance': feature_importances
         }
-        
-        if selected_features:
-            metrics['selected_features'] = selected_features
         
         metrics_path = MODELS_DIR / "training_metrics.json"
         with open(metrics_path, 'w') as f:
-            json.dump(metrics, f, indent=4)
+            json.dump(metrics_dict, f, indent=4)
         logging.info(f"Metrics saved successfully to {metrics_path}")
         
         return True
@@ -502,10 +396,10 @@ def save_model(model, scaler, cv_scores, feature_importance, selected_features=N
 
 def main():
     """
-    Main function to orchestrate the training process
+    Main function to orchestrate the training process for regression models
     """
     start_time = time.time()
-    logging.info("==== Starting model training process ====")
+    logging.info("==== Starting regression model training process ====")
     
     # Load data
     df = load_data()
@@ -514,31 +408,30 @@ def main():
         return None
     
     # Preprocess data
-    X, y, feature_columns, scaler = prepare_data(df)
-    logging.info(f"Data prepared with {X.shape[1]} features and {X.shape[0]} samples")
+    X, y_dict, feature_columns, target_columns, scaler = prepare_data(df)
+    logging.info(f"Data prepared with {X.shape[1]} features, {len(target_columns)} targets, and {X.shape[0]} samples")
     
     # Perform feature selection
-    X_selected, selected_features = select_features(X, y, feature_columns)
+    X_selected, selected_features = select_features(X, y_dict, feature_columns)
     logging.info(f"Feature selection complete: {len(selected_features)} features selected from {len(feature_columns)}")
     
     # Perform hyperparameter tuning
-    best_params = hyperparameter_tuning(X_selected, y)
-    logging.info(f"Hyperparameter tuning complete: {best_params}")
+    best_params = hyperparameter_tuning(X_selected, y_dict)
+    logging.info(f"Hyperparameter tuning complete")
     
-    # Train model with selected features and tuned hyperparameters
-    model, cv_scores, feature_importance = train_model(X_selected, y, selected_features, best_params)
-    logging.info(f"Model training complete. ROC AUC: {np.mean(cv_scores['roc_auc']):.4f}")
+    # Train models for each forecast horizon
+    models, metrics, feature_importances = train_model(X_selected, y_dict, selected_features, target_columns, best_params)
     
-    # Save model and metrics
-    save_success = save_model(model, scaler, cv_scores, feature_importance, selected_features)
+    # Save models and metrics
+    save_success = save_model(models, scaler, metrics, feature_importances, selected_features, target_columns)
     if save_success:
-        logging.info("Model and metrics saved successfully")
+        logging.info("Models and metrics saved successfully")
     else:
-        logging.warning("Failed to save model or metrics")
+        logging.warning("Failed to save models or metrics")
     
     logging.info(f"==== Model training completed in {(time.time() - start_time) / 60:.2f} minutes ====")
     
-    return model, cv_scores, feature_importance
+    return models, metrics, feature_importances
 
 if __name__ == "__main__":
     main()

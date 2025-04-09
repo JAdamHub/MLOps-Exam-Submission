@@ -26,7 +26,8 @@ PRICE_COLUMN = 'price' # Assuming 'price' is the column name after preprocessing
 LAG_PERIODS = [1, 3, 7] # Lag periods in days
 SMA_WINDOWS = [7, 30] # Simple Moving Average windows in days
 VOLATILITY_WINDOW = 14 # Window for rolling standard deviation (volatility)
-TARGET_SHIFT = -1 # Predict next day's price movement
+FORECAST_HORIZONS = [1, 3, 7] # Forudsig prisen 1, 3 og 7 dage frem
+# TARGET_SHIFT = -1 # Predict next day's price movement - ikke brugt længere
 
 # Ensure output directory exists
 PROCESSED_FEATURES_DIR.mkdir(parents=True, exist_ok=True)
@@ -74,11 +75,16 @@ def create_features(df: pd.DataFrame) -> pd.DataFrame | None:
         features_df['year'] = df.index.year # Keep year if useful for longer trends
         logging.debug("Created time-based features: day_of_week, month, year")
 
-        # 5. Target Variable: Price up (1) or down/same (0) tomorrow?
-        features_df['target_price_next_day'] = df[PRICE_COLUMN].shift(TARGET_SHIFT)
-        features_df['target_price_up'] = (features_df['target_price_next_day'] > df[PRICE_COLUMN]).astype(int)
-        features_df.drop(columns=['target_price_next_day'], inplace=True) # Drop the intermediate column
-        logging.debug("Created target variable: target_price_up")
+        # 5. Target Variables: Faktiske priser i fremtiden for forskellige tidshorisonter
+        for horizon in FORECAST_HORIZONS:
+            target_col = f'price_target_{horizon}d'
+            features_df[target_col] = df[PRICE_COLUMN].shift(-horizon)
+            logging.debug(f"Created target variable: {target_col}")
+
+        # Fjern den gamle binære target
+        if 'target_price_up' in features_df.columns:
+            features_df.drop(columns=['target_price_up'], inplace=True)
+            logging.debug("Removed old binary target variable")
 
         # Drop rows with NaNs introduced by lags/rolling windows/target shift
         initial_rows = len(features_df)

@@ -63,7 +63,8 @@ A project demonstrating a basic MLOps pipeline for predicting short-term cryptoc
 This command fetches data from CoinGecko, preprocesses it, engineers features, and trains the model, saving artifacts in `data/` and `models/`.
 
 ```bash
-python src/pipeline/main.py
+# Run from the project root directory
+python -m src.pipeline.main 
 ```
 
 ### 2. Run the API Locally (using Uvicorn):
@@ -155,3 +156,75 @@ Currently, only basic Python logging is implemented. A full monitoring solution 
 ## 🖥️ Frontend Link
 
 No frontend component (e.g., Streamlit, GitHub Pages) was developed for this project. ❌
+
+# Bitcoin Forudsigelsesværktøj
+
+Dette projekt indeholder en API og en Streamlit-app til at analysere og forudsige Bitcoin-priser.
+
+## Struktur
+
+Projektet er organiseret som følger:
+
+- `src/ny_api/`: FastAPI-applikation til at hente Bitcoin-data og lave forudsigelser
+- `src/ny_streamlit/`: Streamlit-applikation til at visualisere data og forudsigelser
+- `models/`: Trænede maskinlæringsmodeller og skalering
+- `data/`: Datakatalog med Bitcoin og makroøkonomiske data
+
+## Kom i gang
+
+### Opsætning af miljø
+
+1. Sørg for at du har Python 3.8+ installeret
+2. Installer afhængigheder:
+
+```bash
+pip install -r requirements.txt
+```
+
+### Start API-serveren
+
+```bash
+# Fra projektets rod
+uvicorn src.ny_api.main:app --reload --port 8000
+```
+
+API-dokumentation vil være tilgængelig på: http://localhost:8000/docs
+
+### Start Streamlit-appen
+
+```bash
+# Fra projektets rod
+streamlit run src/ny_streamlit/app.py
+```
+
+Streamlit-appen vil køre på: http://localhost:8501
+
+## API Endpoints
+
+- `GET /`: Root endpoint med API-information
+- `GET /health`: Health check
+- `GET /prices`: Hent Bitcoin-prishistorik
+  - Parametre: `period` (1month, 3months, 6months, 1year, all), `limit` (antal datapunkter)
+- `POST /predict`: Forudsig Bitcoin-priser
+  - Body: JSON med features til forudsigelsen
+
+## Miljøvariabler
+
+- `API_URL`: URL til API-serveren (standard: http://localhost:8000)
+- `ENVIRONMENT`: Miljøindstilling (development, production) påvirker logging
+
+## Afhængigheder
+
+- FastAPI
+- Streamlit
+- Pandas
+- NumPy
+- Plotly
+- scikit-learn
+- XGBoost
+- joblib
+- requests
+
+## Licens
+
+Dette projekt er udviklet til uddannelsesformål.
