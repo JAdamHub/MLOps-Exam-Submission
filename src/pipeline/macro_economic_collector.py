@@ -52,7 +52,7 @@ class MacroDataCollector:
     def get_yahoo_finance_data(self, symbol, start_date=None):
         """Fetches data from Yahoo Finance"""
         if start_date is None:
-            start_date = (datetime.now() - timedelta(days=3650)).strftime('%Y-%m-%d')
+            start_date = (datetime.now() - timedelta(days=365)).strftime('%Y-%m-%d')
         
         try:
             ticker = yf.Ticker(symbol)
@@ -78,7 +78,7 @@ class MacroDataCollector:
         
         # Bestem start- og slutdato (1 år tilbage)
         end_date = datetime.now()
-        start_date = end_date - timedelta(days=3650)
+        start_date = end_date - timedelta(days=365)
         
         # Få liste over handelsdage
         trading_days = self.get_trading_days(start_date, end_date)
