@@ -1,6 +1,6 @@
 from fastapi import FastAPI, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
-from .models import InputFeatures, PredictionResponse
+from src.api.models import InputFeatures, PredictionResponse
 import joblib
 import pandas as pd
 import logging

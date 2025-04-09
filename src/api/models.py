@@ -57,7 +57,7 @@ class InputFeatures(BaseModel):
 
     # Example to guide users in the API docs
     class Config:
-        schema_extra = {
+        json_schema_extra = {
             "example": {
                 "price": 0.5, # Example scaled value
                 "market_cap": 0.6,

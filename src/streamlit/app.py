@@ -46,8 +46,8 @@ except Exception as e:
 # Function to get latest data
 def get_latest_data():
     try:
-        # Opdateret filsti til features
-        df = pd.read_csv('data/features/bitcoin_features.csv')
+        # Bruger trading days filen i stedet
+        df = pd.read_csv('data/features/bitcoin_features_trading_days.csv')
         return df.iloc[-1]
     except Exception as e:
         st.error(f"Could not fetch data: {e}")
