@@ -1,8 +1,9 @@
 import logging
 import sys
 from pathlib import Path
+from typing import Optional
 
-# Add src directory to Python path to allow importing pipeline modules
+# Tilføj src directory til Python path for at tillade import af pipeline moduler
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.append(str(PROJECT_ROOT))
 
@@ -60,4 +61,4 @@ def run_pipeline():
         sys.exit(1)
 
 if __name__ == "__main__":
-    run_pipeline() 
+    main() 

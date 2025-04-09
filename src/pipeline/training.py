@@ -13,7 +13,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from scipy.stats import randint, uniform
 
-# Configure logging
+# Konfigurer logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # --- Configuration ---

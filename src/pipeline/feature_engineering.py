@@ -1,10 +1,9 @@
 import pandas as pd
 import numpy as np
 import logging
-import sys
 from pathlib import Path
 
-# Configure logging
+# Konfigurer logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # --- Configuration ---
@@ -249,9 +248,7 @@ def calculate_macro_features(data):
     return data
 
 def main():
-    """Main function to run the feature engineering process."""
-    logging.info("--- Starting Feature Engineering ---")
-    
+    """Hovedfunktion til at køre feature engineering."""
     try:
         # Load processed data
         input_file = INTERMEDIATE_PREPROCESSED_DIR / INPUT_FILENAME
@@ -261,103 +258,20 @@ def main():
         # Convert timestamp to datetime
         df['timestamp'] = pd.to_datetime(df['timestamp'])
         
-        # Basic price features
-        df['price_lag_1'] = df['price'].shift(1)
-        df['price_lag_3'] = df['price'].shift(3)
-        df['price_lag_7'] = df['price'].shift(7)
-        df['price_sma_7'] = df['price'].rolling(window=7).mean()
-        df['price_sma_30'] = df['price'].rolling(window=30).mean()
-        df['price_volatility_14'] = df['price'].rolling(window=14).std()
+        # Indlæs rå data
+        data_dir = Path(__file__).resolve().parents[2] / "data"
+        raw_data_path = data_dir / "raw" / "bitcoin_usd_365d_raw.csv"
+        features_data_path = data_dir / "features" / "bitcoin_usd_365d_features.csv"
         
-        # RSI with multiple periods
-        df['rsi_14'] = calculate_rsi(df['price'], periods=14)
-        df['rsi_7'] = calculate_rsi(df['price'], periods=7)
-        df['rsi_21'] = calculate_rsi(df['price'], periods=21)
+        # Opret output mappe hvis den ikke findes
+        features_data_path.parent.mkdir(parents=True, exist_ok=True)
         
-        # MACD with different parameters
-        df['macd'], df['macd_signal'] = calculate_macd(df['price'])
-        df['macd_histogram'] = df['macd'] - df['macd_signal']
-        df['macd_fast'], df['macd_signal_fast'] = calculate_macd(df['price'], fast=8, slow=17, signal=9)
+        # Indlæs data
+        df = pd.read_csv(raw_data_path, index_col='timestamp', parse_dates=True)
+        logger.info(f"Indlæste data fra {raw_data_path}")
         
-        # Bollinger Bands with different windows
-        df['bb_upper'], df['bb_middle'], df['bb_lower'] = calculate_bollinger_bands(df['price'])
-        df['bb_width'] = np.where(
-            df['bb_middle'] != 0,
-            (df['bb_upper'] - df['bb_lower']) / df['bb_middle'],
-            0
-        )
-        df['bb_position'] = np.where(
-            (df['bb_upper'] - df['bb_lower']) != 0,
-            (df['price'] - df['bb_lower']) / (df['bb_upper'] - df['bb_lower']),
-            0.5
-        )
-        
-        # Volume indicators with more windows
-        df['volume_sma_7'] = df['total_volume'].rolling(window=7).mean()
-        df['volume_sma_30'] = df['total_volume'].rolling(window=30).mean()
-        df['volume_ratio'] = np.where(
-            df['volume_sma_7'] != 0,
-            df['total_volume'] / df['volume_sma_7'],
-            1
-        )
-        df['volume_ratio_30'] = np.where(
-            df['volume_sma_30'] != 0,
-            df['total_volume'] / df['volume_sma_30'],
-            1
-        )
-        df['volume_momentum'] = df['total_volume'].pct_change(periods=1)
-        
-        # Price momentum with more periods
-        df['price_momentum_1'] = df['price'].pct_change(periods=1)
-        df['price_momentum_7'] = df['price'].pct_change(periods=7)
-        df['price_momentum_30'] = df['price'].pct_change(periods=30)
-        df['price_momentum_90'] = df['price'].pct_change(periods=90)
-        
-        # Price volatility with different windows
-        df['volatility_7'] = df['price'].rolling(window=7).std()
-        df['volatility_14'] = df['price'].rolling(window=14).std()
-        df['volatility_30'] = df['price'].rolling(window=30).std()
-        
-        # Market-based features
-        df = calculate_market_features(df)
-        
-        # Macroeconomic features
-        df = calculate_macro_features(df)
-        
-        # Interaction features
-        df['price_volatility_ratio'] = np.where(
-            df['volatility_30'] != 0,
-            df['volatility_7'] / df['volatility_30'],
-            1
-        )
-        df['momentum_volatility_ratio'] = np.where(
-            df['volatility_14'] != 0,
-            df['price_momentum_7'] / df['volatility_14'],
-            0
-        )
-        df['volume_price_ratio'] = np.where(
-            df['price'] != 0,
-            df['total_volume'] / df['price'],
-            0
-        )
-        
-        # Time-based features with more granularity
-        df['day_of_week'] = df['timestamp'].dt.dayofweek
-        df['month'] = df['timestamp'].dt.month
-        df['year'] = df['timestamp'].dt.year
-        df['day_of_month'] = df['timestamp'].dt.day
-        df['is_weekend'] = df['day_of_week'].isin([5, 6]).astype(int)
-        
-        # Target variable (next day's price movement)
-        df['target_price_up'] = (df['price'].shift(-1) > df['price']).astype(int)
-        
-        # Drop rows with NaN values
-        df = df.dropna()
-        
-        # Replace infinite values with 0
-        df = df.replace([np.inf, -np.inf], 0)
-        
-        logging.info(f"Dropped {len(df)} rows due to NaN values from feature creation.")
+        # Generer features
+        features_df = engineer.create_features(df)
         
         # Save features
         output_file = PROCESSED_FEATURES_DIR / OUTPUT_FILENAME
@@ -367,7 +281,7 @@ def main():
         logging.info("--- Feature Engineering Completed Successfully ---")
         
     except Exception as e:
-        logging.error(f"Error during feature engineering: {e}")
+        logger.error(f"Fejl i main: {str(e)}")
         raise
 
 if __name__ == "__main__":
