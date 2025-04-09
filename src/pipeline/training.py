@@ -9,9 +9,6 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.feature_selection import SelectFromModel
 import xgboost as xgb
 import json
-import matplotlib.pyplot as plt
-import seaborn as sns
-from scipy.stats import randint, uniform
 import time
 
 # Konfigurer logging
@@ -148,13 +145,6 @@ def select_features(X, y_dict, feature_columns, importance_threshold=0.005):
         'Importance': feature_importances
     }).sort_values(by='Importance', ascending=False)
     
-    # Plot top 20 feature importances
-    plt.figure(figsize=(12, 10))
-    sns.barplot(x='Importance', y='Feature', data=feature_importance_df.head(20))
-    plt.title('Top 20 Feature Importances for Regression (Cross-Validated)')
-    plt.tight_layout()
-    plt.savefig(FIGURES_DIR / 'feature_importances_regression.png')
-    
     # Vælg features baseret på importance threshold
     selected_indices = feature_importances >= importance_threshold
     selected_features = [feature for i, feature in enumerate(feature_columns) if selected_indices[i]]
@@ -224,21 +214,6 @@ def hyperparameter_tuning(X, y_dict):
     # Get best parameters
     best_params = random_search.best_params_
     logging.info(f"Best parameters found: {best_params}")
-    
-    # Plot feature importances from the best model
-    feature_importances = random_search.best_estimator_.feature_importances_
-    
-    # Create a temp dataframe for plotting
-    temp_df = pd.DataFrame({
-        'Feature': range(X.shape[1]),
-        'Importance': feature_importances
-    }).sort_values(by='Importance', ascending=False)
-    
-    plt.figure(figsize=(12, 8))
-    sns.barplot(x='Importance', y='Feature', data=temp_df.head(20))
-    plt.title('Top 20 Feature Importances (Tuned Model)')
-    plt.tight_layout()
-    plt.savefig(FIGURES_DIR / 'feature_importances_tuned.png')
     
     return best_params
 
@@ -337,16 +312,6 @@ def train_model(X, y_dict, feature_names, target_columns, best_params=None):
         avg_r2 = np.mean(cv_scores['r2'])
         logging.info(f"Average metrics for {target_col} - RMSE: {avg_rmse:.4f}, MAE: {avg_mae:.4f}, R²: {avg_r2:.4f}")
         
-        # Plot feature importances for each horizon
-        top_features = pd.DataFrame(list(feature_importance_dict.items()), columns=['Feature', 'Importance'])
-        top_features = top_features.sort_values('Importance', ascending=False).head(20)
-        
-        plt.figure(figsize=(12, 10))
-        sns.barplot(x='Importance', y='Feature', data=top_features)
-        plt.title(f'Top Features for {target_col} Prediction')
-        plt.tight_layout()
-        plt.savefig(FIGURES_DIR / f'feature_importances_{horizon}d.png')
-    
     return models, metrics, feature_importances
 
 def save_model(models, scaler, metrics, feature_importances, feature_names, target_columns):
