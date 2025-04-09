@@ -2,8 +2,6 @@
 
 A project demonstrating a basic MLOps pipeline for predicting short-term cryptocurrency price movements (specifically, whether the next day's closing price will be higher than the current day's) using historical data from the public CoinGecko API.
 
-**⚠️ Disclaimer:** This is a simplified educational example focusing on the MLOps pipeline structure. The prediction model (Logistic Regression with basic features) is not optimized for real-world trading and its performance is low (see `models/training_metrics.json`). Advanced MLOps features like robust monitoring, automated retraining, advanced model validation (CV/HPT), and cloud deployment are not fully implemented.
-
 ## 📁 Project Structure
 
 ```
