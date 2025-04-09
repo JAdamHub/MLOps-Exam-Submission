@@ -6,9 +6,22 @@ import requests
 import os
 import json
 from datetime import datetime, timedelta
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 # API URL configuration - default for local dev, overridden by environment variable in Docker
 API_URL = os.environ.get('API_URL', 'http://localhost:8000')
+
+# Konfigurer retry strategi
+retry_strategy = Retry(
+    total=3,
+    backoff_factor=0.5,
+    status_forcelist=[429, 500, 502, 503, 504],
+)
+adapter = HTTPAdapter(max_retries=retry_strategy)
+session = requests.Session()
+session.mount("http://", adapter)
+session.mount("https://", adapter)
 
 # Configure page
 st.set_page_config(
@@ -23,7 +36,7 @@ st.title("📊 Model Monitoring Dashboard")
 def get_api_data(endpoint):
     """Helper function to get data from API"""
     try:
-        response = requests.get(f"{API_URL}/{endpoint}")
+        response = session.get(f"{API_URL}/{endpoint}", timeout=10)
         
         if response.status_code == 200:
             return response.json()
@@ -32,6 +45,7 @@ def get_api_data(endpoint):
             return None
     except Exception as e:
         st.error(f"Error communicating with API: {e}")
+        st.error(f"API URL: {API_URL} - Check venligst om API'en kører på denne adresse")
         return None
 
 # Sidebar actions
@@ -39,13 +53,14 @@ st.sidebar.header("Model Actions")
 
 if st.sidebar.button("Trigger Model Retraining"):
     try:
-        response = requests.post(f"{API_URL}/monitoring/retrain")
+        response = session.post(f"{API_URL}/monitoring/retrain", timeout=10)
         if response.status_code == 200:
             st.sidebar.success("Retraining initiated!")
         else:
             st.sidebar.error(f"Error triggering retraining: {response.status_code}")
     except Exception as e:
         st.sidebar.error(f"Error communicating with API: {e}")
+        st.sidebar.error(f"API URL: {API_URL} - Check venligst om API'en kører på denne adresse")
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("### Model Health Checks")

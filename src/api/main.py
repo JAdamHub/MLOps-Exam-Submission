@@ -1,6 +1,6 @@
 from fastapi import FastAPI, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
-from src.api.models import InputFeatures, PredictionResponse
+from models import InputFeatures, PredictionResponse
 import joblib
 import pandas as pd
 import logging
@@ -164,19 +164,67 @@ async def predict(features: InputFeatures):
         raise HTTPException(status_code=500, detail="Model not loaded")
         
     try:
-        # Konverter input features til dictionary
-        feature_dict = features.dict()
+        # Konverter input features til dictionary - Pydantic v2 bruger .model_dump() i stedet for .dict()
+        try:
+            feature_dict = features.model_dump()
+            logger.info(f"Feature dict size: {len(feature_dict)} features")
+        except AttributeError:
+            # Fallback til .dict() hvis model_dump ikke findes (Pydantic v1 kompatibilitet)
+            feature_dict = features.dict()
+            logger.info(f"Feature dict size (using .dict()): {len(feature_dict)} features")
+            
+        # Tjek om dictionary er tomt
+        if not feature_dict:
+            logger.error("Received empty feature dictionary")
+            raise HTTPException(status_code=400, detail="Empty feature data received")
+        
+        # Brug feature_names i stedet for expected_features, da expected_features kan være tom
+        features_to_use = feature_names if feature_names else expected_features
+        
+        logger.info(f"Using {len(features_to_use)} features from feature_names")
         
         # Tjek om alle nødvendige features er til stede
-        missing_features = [feat for feat in expected_features if feat not in feature_dict]
+        missing_features = [feat for feat in features_to_use if feat not in feature_dict]
         if missing_features:
+            logger.error(f"Missing features: {missing_features}")
             raise HTTPException(
                 status_code=400, 
                 detail=f"Missing required features: {', '.join(missing_features)}"
             )
             
         # Opret feature array i korrekt rækkefølge
-        feature_array = np.array([feature_dict[feature] for feature in expected_features]).reshape(1, -1)
+        try:
+            logger.info(f"Features to use: {features_to_use[:10]}...")
+            logger.info(f"Feature dict keys: {list(feature_dict.keys())[:10]}...")
+            
+            # Debug check for matching keys
+            matching_keys = [f for f in features_to_use if f in feature_dict]
+            logger.info(f"Matching keys count: {len(matching_keys)} out of {len(features_to_use)}")
+            
+            if len(matching_keys) > 0:
+                logger.info(f"First few matching keys: {matching_keys[:5]}")
+            else:
+                logger.error("No matching keys found between feature_dict and features_to_use!")
+                # Debug actual keys
+                logger.error(f"Feature dict keys (actual): {list(feature_dict.keys())}")
+                logger.error(f"Features to use (actual): {features_to_use}")
+            
+            feature_array = np.array([feature_dict.get(feature, 0.0) for feature in features_to_use]).reshape(1, -1)
+            logger.info(f"Feature array shape: {feature_array.shape}")
+        except KeyError as e:
+            logger.error(f"KeyError when creating feature array: {e}")
+            raise HTTPException(status_code=400, detail=f"Feature not found: {str(e)}")
+        except Exception as e:
+            logger.error(f"Error creating feature array: {e}")
+            raise HTTPException(status_code=500, detail=f"Error creating feature array: {str(e)}")
+        
+        # Tjek feature shape
+        if feature_array.shape[1] != len(features_to_use):
+            logger.error(f"Feature shape mismatch, expected: {len(features_to_use)}, got {feature_array.shape[1]}")
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Feature shape mismatch, expected: {len(features_to_use)}, got {feature_array.shape[1]}"
+            )
         
         # Tjek for data drift hvis drift detector er initialiseret
         if drift_detector is not None and ENVIRONMENT == "production":
@@ -207,7 +255,7 @@ async def predict(features: InputFeatures):
                 prediction=prediction,
                 actual_value=None,  # Vi kender ikke den faktiske værdi endnu
                 features_used=feature_dict,
-                prediction_time=datetime.now()
+                model_version="1.0"  # Brug fast model version string
             )
             logger.info(f"Prediction stored: {prediction} with probability {prediction_proba[1]:.4f}")
         
@@ -216,7 +264,7 @@ async def predict(features: InputFeatures):
             "prediction": int(prediction),
             "probability": float(prediction_proba[1]), # Probability of class 1 (price up)
             "timestamp": datetime.now().isoformat(),
-            "features_used": list(expected_features)
+            "features_used": list(features_to_use)
         }
         
     except Exception as e:
@@ -250,10 +298,15 @@ async def get_metrics():
 def get_model_info():
     if model is None:
         return {"status": "Model not loaded"}
+    
+    # Brug feature_names i stedet for expected_features
+    features_to_use = feature_names if feature_names else expected_features
+    
     return {
         "status": "Model loaded",
         "model_type": str(type(model)),
-        "expected_features": expected_features if expected_features else "Order unknown",
+        "features": features_to_use if features_to_use else "Order unknown",
+        "feature_count": len(features_to_use) if features_to_use else 0,
         # Add other relevant info if available, e.g., model parameters
         # "params": model.get_params() if hasattr(model, 'get_params') else {}
     }
