@@ -6,24 +6,29 @@ import logging
 from pathlib import Path
 import sys
 import numpy as np
+from datetime import datetime
 
-# Configure logging
+# Tilføj project root til Python path
+project_root = Path(__file__).resolve().parents[2]
+sys.path.append(str(project_root))
+
+from src.monitoring.prediction_store import PredictionStore
+
+# Konfigurer logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # --- Configuration & Model Loading ---
-# Determine project root based on script location
-# Assumes the script is in src/api
-PROJECT_ROOT = Path(__file__).resolve().parents[2] # Corrected: Go up two levels to project root
-MODELS_DIR = PROJECT_ROOT / "models"
+MODELS_DIR = project_root / "models"
 MODEL_FILE_PATH = MODELS_DIR / "xgboost_model.joblib"
 SCALER_FILE_PATH = MODELS_DIR / "scaler.joblib"
 FEATURE_NAMES_PATH = MODELS_DIR / "feature_names.joblib"
 
-# --- Global Variables for Model --- (Load once at startup)
+# --- Global Variables for Model ---
 model = None
 scaler = None
-expected_features = None # Store the feature order expected by the model
-feature_names = None # Store the feature names used during training
+expected_features = None
+feature_names = None
+prediction_store = None
 
 app = FastAPI(
     title="Cryptocurrency Price Predictor API",
@@ -34,20 +39,23 @@ app = FastAPI(
 @app.on_event("startup")
 def load_model():
     """Load the trained model when the API starts."""
-    global model, scaler, expected_features, feature_names
+    global model, scaler, expected_features, feature_names, prediction_store
     logging.info("--- Loading Model --- ")
-    if not MODEL_FILE_PATH.exists():
-        logging.error(f"Model file not found at {MODEL_FILE_PATH}. Train the model first.")
-        model = None
-        scaler = None
-        expected_features = []
-        feature_names = []
-        return
-
+    
     try:
+        # Initialiser prediction store
+        prediction_store = PredictionStore()
+        
+        if not MODEL_FILE_PATH.exists():
+            logging.error(f"Model file not found at {MODEL_FILE_PATH}. Train the model first.")
+            model = None
+            scaler = None
+            expected_features = []
+            feature_names = []
+            return
+
         # Load model
         model = joblib.load(MODEL_FILE_PATH)
-        # Store the feature names used during training (important for order)
         if hasattr(model, 'feature_names_in_'):
             expected_features = list(model.feature_names_in_)
             logging.info(f"Model loaded successfully from {MODEL_FILE_PATH}. Expected features: {expected_features}")
@@ -84,70 +92,65 @@ def read_root():
     return {"message": "Welcome to the Crypto Price Predictor API. Use the /predict endpoint."}
 
 @app.post("/predict", response_model=PredictionResponse)
-def predict(features: InputFeatures):
-    """Predicts if the price will go up (1) or not (0)."""
-    global model, scaler, expected_features, feature_names
-    if model is None:
-        logging.error("Model not loaded. Cannot predict.")
-        raise HTTPException(status_code=503, detail="Model is not available. Please check server logs.")
-
-    if scaler is None:
-        logging.error("Scaler not loaded. Cannot preprocess input.")
-        raise HTTPException(status_code=503, detail="Scaler is not available.")
+async def predict(features: InputFeatures):
+    """Make a prediction using the trained model."""
+    if model is None or scaler is None:
+        raise HTTPException(status_code=500, detail="Model not loaded")
         
-    if not feature_names:
-        logging.error("Feature names not loaded. Cannot preprocess input.")
-        raise HTTPException(status_code=503, detail="Feature names are not available.")
-
     try:
-        # Convert Pydantic model to DataFrame
-        input_data = pd.DataFrame([features.dict()])
-        logging.info(f"Received input data: \n{input_data}")
-        logging.info(f"Input data columns: {input_data.columns.tolist()}")
-
-        # Feature Scaling
-        try:
-            # Use feature names from saved file
-            numerical_cols = feature_names
-            logging.info(f"Numerical columns for scaling: {numerical_cols}")
-            
-            # Check if all required columns are present
-            missing_cols = [col for col in numerical_cols if col not in input_data.columns]
-            if missing_cols:
-                raise ValueError(f"Missing columns for scaling: {missing_cols}")
-            
-            input_data_scaled = scaler.transform(input_data[numerical_cols])
-            input_data[numerical_cols] = input_data_scaled
-            logging.info("Input data scaled successfully.")
-        except Exception as e:
-            logging.error(f"Error scaling input data: {e}")
-            raise HTTPException(status_code=400, detail=f"Error processing input features for scaling: {str(e)}")
-
-        # Ensure feature order matches the model's expectation
-        if expected_features:
-            try:
-                input_data = input_data[expected_features] # Reorder columns
-                logging.info("Input data columns reordered to match model expectation.")
-            except KeyError as e:
-                logging.error(f"Missing expected feature in input: {e}")
-                raise HTTPException(status_code=400, detail=f"Missing expected feature: {e}. Expected: {expected_features}")
-        else:
-            logging.warning("Model feature order unknown, predicting with received order. May be inaccurate.")
-
-        # Make prediction
-        prediction = model.predict(input_data)[0]
-        probability = model.predict_proba(input_data)[0, 1] # Probability of class 1 (price up)
-
-        logging.info(f"Prediction successful: Class={prediction}, Probability={probability:.4f}")
-
-        return PredictionResponse(prediction=int(prediction), probability=float(probability))
-
-    except HTTPException as http_exc:
-        # Re-raise HTTPExceptions directly
-        raise http_exc
+        # Konverter input features til dictionary
+        feature_dict = features.dict()
+        
+        # Opret feature array i korrekt rækkefølge
+        feature_array = np.array([feature_dict[feature] for feature in expected_features]).reshape(1, -1)
+        
+        # Skaler features
+        scaled_features = scaler.transform(feature_array)
+        
+        # Lav prædiktion
+        prediction = model.predict(scaled_features)[0]
+        prediction_proba = model.predict_proba(scaled_features)[0]
+        
+        # Gem prædiktion
+        prediction_store.store_prediction(
+            prediction=prediction,
+            actual_value=None,  # Vi kender ikke den faktiske værdi endnu
+            features_used=feature_dict,
+            model_version="1.0"  # Dette bør hentes fra model metadata
+        )
+        
+        return PredictionResponse(
+            prediction=prediction,
+            confidence=float(prediction_proba[1]),
+            timestamp=datetime.now().isoformat(),
+            features_used=expected_features
+        )
+        
     except Exception as e:
-        logging.error(f"Error during prediction: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Internal server error during prediction: {str(e)}")
+        logging.error(f"Error making prediction: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/health")
+async def health_check():
+    """Check if the API is healthy."""
+    return {
+        "status": "healthy",
+        "model_loaded": model is not None,
+        "scaler_loaded": scaler is not None
+    }
+
+@app.get("/metrics")
+async def get_metrics():
+    """Get model performance metrics."""
+    if prediction_store is None:
+        raise HTTPException(status_code=500, detail="Prediction store not initialized")
+        
+    try:
+        metrics = prediction_store.get_prediction_metrics()
+        return metrics
+    except Exception as e:
+        logging.error(f"Error getting metrics: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 # --- Optional: Add endpoint to view loaded model info ---
 @app.get("/model_info")
