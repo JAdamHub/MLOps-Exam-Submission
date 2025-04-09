@@ -8,6 +8,7 @@ sys.path.append(str(PROJECT_ROOT))
 
 # Import the main functions from each pipeline step
 from pipeline import ingestion, preprocessing, feature_engineering, training
+from pipeline import makro_data_collector, combined_data_processor  # Import nye moduler
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -22,17 +23,28 @@ def run_pipeline():
         ingestion.main()
         logging.info("--- Data Ingestion Finished ---")
 
-        # Step 2: Data Preprocessing
+        # Step 2: Macroeconomic Data Collection
+        logging.info("--- Running Macroeconomic Data Collection ---")
+        collector = makro_data_collector.MacroDataCollector()
+        collector.collect_all_macro_data()
+        logging.info("--- Macroeconomic Data Collection Finished ---")
+        
+        # Step 3: Combine Bitcoin and Macroeconomic Data
+        logging.info("--- Running Data Combination ---")
+        combined_data_processor.main()
+        logging.info("--- Data Combination Finished ---")
+
+        # Step 4: Data Preprocessing
         logging.info("--- Running Data Preprocessing ---")
         preprocessing.main()
         logging.info("--- Data Preprocessing Finished ---")
 
-        # Step 3: Feature Engineering
+        # Step 5: Feature Engineering
         logging.info("--- Running Feature Engineering ---")
         feature_engineering.main()
         logging.info("--- Feature Engineering Finished ---")
 
-        # Step 4: Model Training
+        # Step 6: Model Training
         logging.info("--- Running Model Training ---")
         training.main()
         logging.info("--- Model Training Finished ---")

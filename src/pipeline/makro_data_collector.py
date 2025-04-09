@@ -6,6 +6,7 @@ import logging
 from pathlib import Path
 import os
 from dotenv import load_dotenv
+import numpy as np
 
 # Load environment variables
 load_dotenv()
@@ -18,11 +19,17 @@ class MacroDataCollector:
         self.base_path = Path(__file__).resolve().parents[2] / "data" / "macro"
         self.base_path.mkdir(parents=True, exist_ok=True)
         self.fred_api_key = os.getenv('FRED_API_KEY')
-        if not self.fred_api_key:
-            raise ValueError("FRED_API_KEY ikke fundet i .env filen")
+        if not self.fred_api_key or self.fred_api_key == "your_fred_api_key_here":
+            logger.warning("FRED_API_KEY ikke fundet eller er standard værdi. Genererer mock data.")
+            self.use_mock_data = True
+        else:
+            self.use_mock_data = False
 
     def get_fred_data(self, series_id, start_date=None):
         """Henter data fra FRED (Federal Reserve Economic Data)"""
+        if self.use_mock_data:
+            return self._generate_mock_fred_data(series_id)
+            
         if start_date is None:
             start_date = (datetime.now() - timedelta(days=365)).strftime('%Y-%m-%d')
         
@@ -47,6 +54,9 @@ class MacroDataCollector:
 
     def get_yahoo_finance_data(self, symbol, start_date=None):
         """Henter data fra Yahoo Finance"""
+        if self.use_mock_data:
+            return self._generate_mock_yahoo_data(symbol)
+            
         if start_date is None:
             start_date = (datetime.now() - timedelta(days=365)).strftime('%Y-%m-%d')
         
@@ -57,6 +67,53 @@ class MacroDataCollector:
         except Exception as e:
             logger.error(f"Fejl ved hentning af Yahoo Finance data for {symbol}: {e}")
             return None
+            
+    def _generate_mock_fred_data(self, series_id):
+        """Genererer mock data for FRED serier"""
+        today = datetime.now()
+        dates = [today - timedelta(days=i) for i in range(365)]
+        dates.sort()  # Sorter i kronologisk rækkefølge
+        
+        if series_id == 'CPIAUCSL':  # CPI
+            values = np.linspace(280, 300, len(dates))  # Stiger lidt over tid
+            # Tilføj lidt støj
+            values += np.random.normal(0, 1, len(dates))
+        elif series_id == 'DFF':  # Federal Funds Rate
+            # Starter ved omkring 5% og falder lidt
+            values = np.linspace(5.0, 4.75, len(dates))
+            # Tilføj små ændringer
+            values += np.random.normal(0, 0.05, len(dates))
+        else:
+            # Generisk mock data
+            values = np.random.normal(100, 10, len(dates))
+            # Tilføj trend
+            values = values + np.linspace(0, 20, len(dates))
+            
+        return pd.Series(values, index=dates)
+        
+    def _generate_mock_yahoo_data(self, symbol):
+        """Genererer mock data for Yahoo Finance symboler"""
+        today = datetime.now()
+        dates = [today - timedelta(days=i) for i in range(365)]
+        dates.sort()  # Sorter i kronologisk rækkefølge
+        
+        if symbol == 'DX-Y.NYB':  # Dollar Index
+            # Start omkring 100 og lav en svag stigning
+            values = np.linspace(100, 105, len(dates))
+            # Tilføj lidt volatilitet
+            values += np.random.normal(0, 1, len(dates))
+        elif symbol == '^GSPC':  # S&P 500
+            # Start omkring 4000 og lav en svag stigning
+            values = np.linspace(4000, 4800, len(dates))
+            # Tilføj lidt volatilitet
+            values += np.random.normal(0, 30, len(dates))
+        else:
+            # Generisk mock data
+            values = np.random.normal(100, 5, len(dates))
+            # Tilføj trendy bevægelse
+            values = values + np.linspace(0, 30, len(dates))
+            
+        return pd.Series(values, index=dates)
 
     def collect_all_macro_data(self):
         """Indsamler alle makroøkonomiske data"""

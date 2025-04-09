@@ -194,6 +194,60 @@ def calculate_market_features(data):
     
     return data
 
+def calculate_macro_features(data):
+    """Calculate macroeconomic-based features"""
+    # Tjek om makroøkonomiske kolonner findes
+    macro_columns = ['cpi', 'fed_rate', 'dxy', 'sp500']
+    available_columns = [col for col in macro_columns if col in data.columns]
+    
+    if not available_columns:
+        logging.warning("Ingen makroøkonomiske indikatorer fundet i datasættet")
+        return data
+    
+    logging.info(f"Fandt følgende makroøkonomiske indikatorer: {available_columns}")
+    
+    # Fed rate lag features
+    if 'fed_rate' in data.columns:
+        data['fed_rate_lag_1'] = data['fed_rate'].shift(1)
+        data['fed_rate_change'] = data['fed_rate'] - data['fed_rate_lag_1']
+        data['fed_rate_diff_7d'] = data['fed_rate'] - data['fed_rate'].shift(7)
+    
+    # CPI features
+    if 'cpi' in data.columns:
+        data['cpi_mom'] = data['cpi'].pct_change(periods=1)
+        data['cpi_3m'] = data['cpi'].pct_change(periods=90)
+        data['cpi_6m'] = data['cpi'].pct_change(periods=180)
+    
+    # DXY (Dollar Index) features
+    if 'dxy' in data.columns:
+        data['dxy_change'] = data['dxy'].pct_change(periods=1)
+        data['dxy_ma7'] = data['dxy'].rolling(window=7).mean()
+        data['dxy_ma30'] = data['dxy'].rolling(window=30).mean()
+        data['dxy_volatility'] = data['dxy'].rolling(window=14).std()
+        
+        # DXY RSI
+        data['dxy_rsi_14'] = calculate_rsi(data['dxy'], periods=14)
+    
+    # S&P 500 features
+    if 'sp500' in data.columns:
+        data['sp500_change'] = data['sp500'].pct_change(periods=1)
+        data['sp500_ma7'] = data['sp500'].rolling(window=7).mean()
+        data['sp500_ma30'] = data['sp500'].rolling(window=30).mean()
+        data['sp500_volatility'] = data['sp500'].rolling(window=14).std()
+        
+        # S&P 500 RSI
+        data['sp500_rsi_14'] = calculate_rsi(data['sp500'], periods=14)
+    
+    # Correlation mellem Bitcoin og S&P 500 (rullende 30-dages korrelation)
+    if 'sp500' in data.columns:
+        data['btc_sp500_corr_30d'] = data['price'].rolling(window=30).corr(data['sp500'])
+    
+    # Correlation mellem Bitcoin og DXY (rullende 30-dages korrelation)
+    if 'dxy' in data.columns:
+        data['btc_dxy_corr_30d'] = data['price'].rolling(window=30).corr(data['dxy'])
+    
+    return data
+
 def main():
     """Main function to run the feature engineering process."""
     logging.info("--- Starting Feature Engineering ---")
@@ -266,6 +320,9 @@ def main():
         
         # Market-based features
         df = calculate_market_features(df)
+        
+        # Macroeconomic features
+        df = calculate_macro_features(df)
         
         # Interaction features
         df['price_volatility_ratio'] = np.where(

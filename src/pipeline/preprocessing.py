@@ -13,11 +13,12 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 # Assumes the script is in src/pipeline
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 RAW_DATA_DIR = PROJECT_ROOT / "data" / "raw"
+COMBINED_DATA_DIR = PROJECT_ROOT / "data" / "combined"
 PROCESSED_DATA_DIR = PROJECT_ROOT / "data" / "processed"
 MODELS_DIR = PROJECT_ROOT / "models"
 
-# Input file from ingestion step (adjust if needed based on ingestion.py config)
-INPUT_FILENAME = "bitcoin_usd_365d_raw.csv"
+# Input file from combined data step
+INPUT_FILENAME = "bitcoin_macro_combined.csv"
 # Output files
 OUTPUT_FILENAME = "bitcoin_usd_365d_processed.csv"
 SCALER_FILENAME = "minmax_scaler.joblib"
@@ -26,7 +27,7 @@ SCALER_FILENAME = "minmax_scaler.joblib"
 PROCESSED_DATA_DIR.mkdir(parents=True, exist_ok=True)
 MODELS_DIR.mkdir(parents=True, exist_ok=True)
 
-INPUT_FILE_PATH = RAW_DATA_DIR / INPUT_FILENAME
+INPUT_FILE_PATH = COMBINED_DATA_DIR / INPUT_FILENAME
 OUTPUT_FILE_PATH = PROCESSED_DATA_DIR / OUTPUT_FILENAME
 SCALER_FILE_PATH = MODELS_DIR / SCALER_FILENAME
 
@@ -36,7 +37,17 @@ def load_data(filepath: Path) -> pd.DataFrame | None:
         logging.error(f"Input file not found: {filepath}")
         return None
     try:
-        df = pd.read_csv(filepath, index_col='timestamp', parse_dates=True)
+        df = pd.read_csv(filepath)
+        # Sørg for at timestamps håndteres korrekt
+        if 'timestamp' in df.columns:
+            df['timestamp'] = pd.to_datetime(df['timestamp'])
+            df.set_index('timestamp', inplace=True)
+        elif 'Unnamed: 0' in df.columns:
+            # Håndter tilfælde hvor index er blevet gemt som kolonne
+            df['timestamp'] = pd.to_datetime(df['Unnamed: 0'])
+            df.set_index('timestamp', inplace=True)
+            df.drop(columns=['Unnamed: 0'], inplace=True, errors='ignore')
+        
         logging.info(f"Data loaded successfully from {filepath}")
         return df
     except Exception as e:
