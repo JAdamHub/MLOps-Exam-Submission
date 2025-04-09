@@ -146,5 +146,19 @@
             "price_ema_5": 0.045259627606719734,
             "price_ema_20": 0.00037065725773572923
         }
-    }
+    },
+    "accuracy_history": [
+        {
+            "date": "2024-03-20",
+            "accuracy": 0.7523
+        }
+    ],
+    "last_update": "2024-03-20 01:00:00",
+    "model_versions": [
+        {
+            "version": 1,
+            "date": "2024-03-20",
+            "accuracy": 0.7523
+        }
+    ]
 }
