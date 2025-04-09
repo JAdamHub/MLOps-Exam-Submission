@@ -30,7 +30,8 @@ except Exception as e:
 # Function to get latest data
 def get_latest_data():
     try:
-        df = pd.read_csv('data/features/bitcoin_usd_365d_features.csv')
+        # Opdateret filsti til features
+        df = pd.read_csv('data/features/bitcoin_features.csv')
         return df.iloc[-1]
     except Exception as e:
         st.error(f"Could not fetch data: {e}")
@@ -166,7 +167,8 @@ def make_prediction(data):
 # Function to display price history
 def plot_price_history():
     try:
-        df = pd.read_csv('data/raw/bitcoin_usd_365d_raw.csv')
+        # Opdateret filsti til rådata
+        df = pd.read_csv('data/raw/crypto/bitcoin_usd_365d.csv')
         df['timestamp'] = pd.to_datetime(df['timestamp'])
         
         fig = go.Figure()

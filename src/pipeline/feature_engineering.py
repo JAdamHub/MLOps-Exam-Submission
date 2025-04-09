@@ -2,6 +2,8 @@ import pandas as pd
 import numpy as np
 import logging
 from pathlib import Path
+import sys
+import joblib
 
 # Konfigurer logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -11,7 +13,8 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 # Assumes the script is in src/pipeline
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 INTERMEDIATE_PREPROCESSED_DIR = PROJECT_ROOT / "data" / "intermediate" / "preprocessed"  # Updated path
-PROCESSED_FEATURES_DIR = PROJECT_ROOT / "data" / "processed" / "features"  # Updated path
+PROCESSED_FEATURES_DIR = PROJECT_ROOT / "data" / "features"
+MODELS_DIR = PROJECT_ROOT / "models"
 
 # Input file from preprocessing step
 INPUT_FILENAME = "bitcoin_macro_preprocessed.csv"  # Updated filename
@@ -32,16 +35,13 @@ INPUT_FILE_PATH = INTERMEDIATE_PREPROCESSED_DIR / INPUT_FILENAME
 OUTPUT_FILE_PATH = PROCESSED_FEATURES_DIR / OUTPUT_FILENAME
 
 def load_data(filepath: Path) -> pd.DataFrame | None:
-    """Loads data from a CSV file."""
-    if not filepath.exists():
-        logging.error(f"Input file not found: {filepath}")
-        return None
+    """Load preprocessed data."""
     try:
-        df = pd.read_csv(filepath, index_col='timestamp', parse_dates=True)
+        df = pd.read_csv(filepath, index_col=0, parse_dates=True)
         logging.info(f"Processed data loaded successfully from {filepath}")
         return df
     except Exception as e:
-        logging.error(f"Error loading data from {filepath}: {e}")
+        logging.error(f"Error loading processed data: {e}")
         return None
 
 def create_features(df: pd.DataFrame) -> pd.DataFrame | None:
@@ -248,19 +248,13 @@ def calculate_macro_features(data):
     return data
 
 def main():
-    """Hovedfunktion til at køre feature engineering."""
+    """Main function to run the feature engineering process."""
+    logging.info("Starting feature engineering")
+    
     try:
-        # Load processed data
-        input_file = INTERMEDIATE_PREPROCESSED_DIR / INPUT_FILENAME
-        df = pd.read_csv(input_file)
-        logging.info(f"Processed data loaded successfully from {input_file}")
-        
-        # Convert timestamp to datetime
-        df['timestamp'] = pd.to_datetime(df['timestamp'])
-        
         # Indlæs rå data
         data_dir = Path(__file__).resolve().parents[2] / "data"
-        raw_data_path = data_dir / "raw" / "bitcoin_usd_365d_raw.csv"
+        raw_data_path = data_dir / "raw" / "crypto" / "bitcoin_usd_365d.csv"
         features_data_path = data_dir / "features" / "bitcoin_usd_365d_features.csv"
         
         # Opret output mappe hvis den ikke findes
@@ -268,20 +262,20 @@ def main():
         
         # Indlæs data
         df = pd.read_csv(raw_data_path, index_col='timestamp', parse_dates=True)
-        logger.info(f"Indlæste data fra {raw_data_path}")
+        logging.info(f"Indlæste data fra {raw_data_path}")
         
         # Generer features
-        features_df = engineer.create_features(df)
+        features_df = create_features(df)
         
         # Save features
         output_file = PROCESSED_FEATURES_DIR / OUTPUT_FILENAME
-        df.to_csv(output_file, index=False)
+        features_df.to_csv(output_file, index=True)
         logging.info(f"Features data saved successfully to {output_file}")
         
         logging.info("--- Feature Engineering Completed Successfully ---")
         
     except Exception as e:
-        logger.error(f"Fejl i main: {str(e)}")
+        logging.error(f"Fejl i main: {str(e)}")
         raise
 
 if __name__ == "__main__":
