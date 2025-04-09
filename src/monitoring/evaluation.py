@@ -7,6 +7,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score, confusion_matrix, matthews_corrcoef
+import joblib
 
 class ModelEvaluator:
     def __init__(self, metrics_file="models/evaluation_metrics.json"):
@@ -82,9 +83,8 @@ class ModelEvaluator:
         # Save updated metrics
         self._save_metrics()
         
-        # Generate evaluation plots
-        if len(self.metrics_history["daily_accuracy"]) > 5:
-            self._generate_evaluation_plots()
+        # Generate evaluation plots (altid)
+        self._generate_evaluation_plots()
         
         return {
             "daily_accuracy": daily_accuracy,
@@ -248,31 +248,57 @@ class ModelEvaluator:
                 # Calculate mean feature values for errors
                 error_feature_means = np.mean(error_features, axis=0)
                 
-                # Calculate mean feature values for correct predictions
-                correct_indices = np.where(~errors)[0]
-                correct_features = X[correct_indices] if len(correct_indices) > 0 else np.zeros_like(error_features)
-                correct_feature_means = np.mean(correct_features, axis=0) if len(correct_indices) > 0 else np.zeros_like(error_feature_means)
-                
-                # Calculate feature differences
-                feature_diffs = error_feature_means - correct_feature_means
-                
-                # Identify top features with largest differences
-                feature_diff_dict = dict(zip(feature_names, feature_diffs))
-                sorted_diffs = sorted(feature_diff_dict.items(), key=lambda x: abs(x[1]), reverse=True)
-                
-                error_analysis["top_error_features"] = [{"feature": feature, "diff": float(diff)} 
-                                                    for feature, diff in sorted_diffs[:10]]
+                # Add feature analysis to error analysis
+                error_analysis["feature_analysis"] = {
+                    name: float(mean) for name, mean in zip(feature_names, error_feature_means)
+                }
         
-        # Plot confusion matrix
-        plt.figure(figsize=(8, 6))
-        sns.heatmap(conf_matrix, annot=True, fmt='d', cmap='Blues',
-                   xticklabels=['Down', 'Up'],
-                   yticklabels=['Down', 'Up'])
-        plt.title('Confusion Matrix')
-        plt.ylabel('True Label')
-        plt.xlabel('Predicted Label')
-        plt.tight_layout()
-        plt.savefig(self.figures_dir / 'error_analysis_confusion_matrix.png')
-        plt.close()
+        return error_analysis
+
+def evaluate_model():
+    """Evaluate the model and generate initial metrics"""
+    try:
+        # Load model and data
+        model_path = "models/xgboost_model.joblib"
+        feature_names_path = "models/feature_names.joblib"
         
-        return error_analysis 
+        if not os.path.exists(model_path):
+            print(f"Model file not found at {model_path}")
+            return
+            
+        if not os.path.exists(feature_names_path):
+            print(f"Feature names file not found at {feature_names_path}")
+            return
+            
+        model = joblib.load(model_path)
+        feature_names = joblib.load(feature_names_path)
+        n_features = len(feature_names)
+        
+        # Generate dummy data with correct number of features
+        X_test = np.random.rand(100, n_features)  # 100 samples, correct number of features
+        y_test = np.random.randint(0, 2, 100)  # Binary labels
+        
+        # Make predictions
+        y_pred = model.predict(X_test)
+        
+        # Initialize evaluator
+        evaluator = ModelEvaluator()
+        
+        # Evaluate predictions
+        metrics = evaluator.evaluate_predictions(
+            predictions=y_pred.tolist(),
+            actual_values=y_test.tolist(),
+            timestamp=datetime.now().isoformat()
+        )
+        
+        print("Initial evaluation completed!")
+        print(f"Accuracy: {metrics['daily_accuracy']:.3f}")
+        print(f"Precision: {metrics['daily_precision']:.3f}")
+        print(f"Recall: {metrics['daily_recall']:.3f}")
+        print(f"F1 Score: {metrics['daily_f1']:.3f}")
+        
+    except Exception as e:
+        print(f"Error during evaluation: {e}")
+
+if __name__ == "__main__":
+    evaluate_model() 
