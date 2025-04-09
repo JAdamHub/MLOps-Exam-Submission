@@ -17,9 +17,9 @@ INTERMEDIATE_PREPROCESSED_DIR = PROJECT_ROOT / "data" / "intermediate" / "prepro
 MODELS_DIR = PROJECT_ROOT / "models"
 
 # Input file from combined data step
-INPUT_FILENAME = "bitcoin_macro_combined.csv"
+INPUT_FILENAME = "bitcoin_macro_combined_trading_days.csv"
 # Output files
-OUTPUT_FILENAME = "bitcoin_macro_preprocessed.csv"  # Updated filename
+OUTPUT_FILENAME = "bitcoin_macro_preprocessed_trading_days.csv"  # Opdateret filnavn
 SCALER_FILENAME = "minmax_scaler.joblib"
 
 # Ensure output directories exist
@@ -73,6 +73,8 @@ def preprocess_data(df: pd.DataFrame) -> tuple[pd.DataFrame | None, MinMaxScaler
             
         # Handle missing values - Forward fill is common for time series
         original_rows = len(df)
+        logging.info("Handling missing values using forward fill (last known value) and backward fill (first future known value)")
+        logging.info("For weekend data in macroeconomic indicators, this preserves Friday's values throughout the weekend")
         df.ffill(inplace=True) # Forward fill
         df.bfill(inplace=True) # Back fill any remaining NaNs at the beginning
         

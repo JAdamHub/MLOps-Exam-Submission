@@ -4,6 +4,9 @@ import logging
 import sys
 from pathlib import Path
 import time
+from pandas.tseries.holiday import USFederalHolidayCalendar
+from pandas.tseries.offsets import CustomBusinessDay
+from datetime import datetime, timedelta
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -19,12 +22,45 @@ COIN_ID = "bitcoin"
 VS_CURRENCY = "usd"
 DAYS = 365 # Number of days of historical data
 TARGET_FILENAME = f"{COIN_ID}_{VS_CURRENCY}_365d.csv"  # Simplified filename
+TARGET_TRADING_DAYS_FILENAME = f"{COIN_ID}_{VS_CURRENCY}_trading_days.csv"  # Ny fil med kun handelsdage
 API_ENDPOINT = f"/coins/{COIN_ID}/market_chart"
 MAX_RETRIES = 3
 RETRY_DELAY = 5 # seconds
 
 # Ensure data directory exists
 RAW_DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+def get_trading_days(start_date, end_date):
+    """
+    Genererer en liste over handelsdage (trading days), hvor den amerikanske børs er åben.
+    Ekskluderer weekender og amerikanske helligdage.
+    
+    Args:
+        start_date: Startdato som string 'YYYY-MM-DD' eller datetime
+        end_date: Slutdato som string 'YYYY-MM-DD' eller datetime
+        
+    Returns:
+        DatetimeIndex med handelsdage
+    """
+    # Konverter til datetime hvis nødvendigt
+    if isinstance(start_date, str):
+        start_date = pd.to_datetime(start_date)
+    if isinstance(end_date, str):
+        end_date = pd.to_datetime(end_date)
+        
+    # Definer amerikanske helligdage
+    us_holidays = USFederalHolidayCalendar()
+    holidays = us_holidays.holidays(start=start_date, end=end_date)
+    
+    # Definer en business day, der ekskluderer weekender og helligdage
+    business_days = CustomBusinessDay(calendar=us_holidays)
+    
+    # Generer en liste over handelsdage
+    trading_days = pd.date_range(start=start_date, end=end_date, freq=business_days)
+    
+    logging.info(f"Genererede {len(trading_days)} handelsdage mellem {start_date.strftime('%Y-%m-%d')} og {end_date.strftime('%Y-%m-%d')}")
+    
+    return trading_days
 
 def fetch_data(endpoint: str, params: dict) -> dict | None:
     """Fetches data from the CoinGecko API with retry logic."""
@@ -76,12 +112,54 @@ def save_data(data: dict, filename: Path) -> bool:
         output_path = RAW_DATA_DIR / filename
         df.to_csv(output_path)
         logging.info(f"Data saved successfully to {output_path}")
+        
+        # Gem også en version, der kun indeholder handelsdage
+        save_trading_days_only(df)
+        
         return True
     except KeyError as e:
         logging.error(f"Missing expected key in API response: {e}")
         return False
     except Exception as e:
         logging.error(f"Error processing or saving data: {e}")
+        return False
+
+def save_trading_days_only(df):
+    """
+    Filtrer data til kun at indeholde handelsdage (børsåbningsdage).
+    Gemmer en separat fil med kun handelsdage.
+    """
+    try:
+        # Find start- og slutdato fra data
+        start_date = df.index.min()
+        end_date = df.index.max()
+        
+        # Få liste over handelsdage i perioden
+        trading_days = get_trading_days(start_date, end_date)
+        
+        # Filtrer data til kun at indeholde handelsdage
+        trading_days_df = df.reindex(trading_days).dropna(how='all')
+        
+        # Hvis der er manglende data, brug forward/backward fill
+        if trading_days_df.isnull().any().any():
+            logging.info("Udfylder manglende værdier for handelsdage ved hjælp af forward/backward fill")
+            trading_days_df = trading_days_df.ffill().bfill()
+        
+        # Tilføj information om det er en handelsdag
+        trading_days_df['is_trading_day'] = 1
+        
+        # Beregn antal dage siden sidste handelsdag (kan være nyttigt for modellen)
+        trading_days_df['days_since_last_trading'] = (trading_days_df.index.to_series().diff().dt.days)
+        trading_days_df['days_since_last_trading'] = trading_days_df['days_since_last_trading'].fillna(0)
+        
+        # Gem til CSV
+        output_path = RAW_DATA_DIR / TARGET_TRADING_DAYS_FILENAME
+        trading_days_df.to_csv(output_path)
+        logging.info(f"Trading days data saved successfully to {output_path} ({len(trading_days_df)} trading days)")
+        
+        return True
+    except Exception as e:
+        logging.error(f"Error saving trading days data: {e}")
         return False
 
 def main():

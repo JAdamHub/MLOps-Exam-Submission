@@ -1,64 +1,83 @@
 import logging
 import sys
+import importlib
+import os
 from pathlib import Path
-from typing import Optional
-
-# Tilføj src directory til Python path for at tillade import af pipeline moduler
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.append(str(PROJECT_ROOT))
-
-# Import the main functions from each pipeline step
-from pipeline import crypto_data_collector, preprocessing, feature_engineering, training
-from pipeline import macro_economic_collector, combined_data_processor  # Updated module names
+from dotenv import load_dotenv
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-def run_pipeline():
-    """Runs the complete data processing and model training pipeline."""
-    logging.info("========== Starting Full Pipeline Execution ==========")
-
+def run_module(module_name, skip_errors=False):
+    """Run a Python module by name"""
     try:
-        # Step 1: Cryptocurrency Data Collection
-        logging.info("--- Running Cryptocurrency Data Collection ---")
-        crypto_data_collector.main()
-        logging.info("--- Cryptocurrency Data Collection Finished ---")
-
-        # Step 2: Macroeconomic Data Collection
-        logging.info("--- Running Macroeconomic Data Collection ---")
-        collector = macro_economic_collector.MacroDataCollector()
-        collector.collect_all_macro_data()
-        logging.info("--- Macroeconomic Data Collection Finished ---")
-        
-        # Step 3: Combine Bitcoin and Macroeconomic Data
-        logging.info("--- Running Data Combination ---")
-        combined_data_processor.main()
-        logging.info("--- Data Combination Finished ---")
-
-        # Step 4: Data Preprocessing
-        logging.info("--- Running Data Preprocessing ---")
-        preprocessing.main()
-        logging.info("--- Data Preprocessing Finished ---")
-
-        # Step 5: Feature Engineering
-        logging.info("--- Running Feature Engineering ---")
-        feature_engineering.main()
-        logging.info("--- Feature Engineering Finished ---")
-
-        # Step 6: Model Training
-        logging.info("--- Running Model Training ---")
-        training.main()
-        logging.info("--- Model Training Finished ---")
-
-        logging.info("========== Full Pipeline Execution Completed Successfully ==========")
-
-    except SystemExit as e:
-        # Catch SystemExit raised by pipeline steps on failure
-        logging.error(f"Pipeline execution halted with exit code {e.code}. Check previous logs for errors.")
-        sys.exit(e.code)
+        logging.info(f"Starting module: {module_name}")
+        module = importlib.import_module(module_name)
+        if hasattr(module, 'main'):
+            module.main()
+        else:
+            logging.warning(f"Module {module_name} has no main() function")
+        logging.info(f"Completed module: {module_name}")
+        return True
     except Exception as e:
-        logging.error(f"An unexpected error occurred during pipeline execution: {e}", exc_info=True)
+        logging.error(f"Error running {module_name}: {e}")
+        if not skip_errors:
+            raise
+        return False
+
+def main():
+    """
+    Main function to run the entire data pipeline.
+    Processing steps:
+    1. Collect cryptocurrency data (Bitcoin)
+    2. Collect macroeconomic data
+    3. Combine datasets (kun handelsdage - US stock market åbningsdage)
+    4. Preprocess combined data
+    5. Feature engineering
+    6. Train machine learning model
+    """
+    # Load environment variables from .env file
+    dotenv_path = Path(__file__).resolve().parents[2] / ".env"
+    if dotenv_path.exists():
+        load_dotenv(dotenv_path=dotenv_path)
+        logging.info(f"Loaded environment variables from {dotenv_path}")
+    else:
+        logging.warning(f".env file not found at {dotenv_path}")
+        
+    logging.info("=== Starting ML Pipeline ===")
+    logging.info("BEMÆRK: Denne pipeline arbejder kun med data fra handelsdage (US stock market åbningsdage)")
+    
+    # Data Collection steps
+    if not run_module("src.pipeline.crypto_data_collector", skip_errors=False):
+        logging.error("Halting pipeline due to error in crypto data collection")
         sys.exit(1)
+    
+    # Kører makroøkonomisk datahentning (nu med Yahoo Finance)
+    if not run_module("src.pipeline.macro_economic_collector", skip_errors=False):
+        logging.error("Halting pipeline due to error in macro economic data collection")
+        sys.exit(1)
+    
+    # Data Integration
+    if not run_module("src.pipeline.combined_data_processor", skip_errors=False):
+        logging.error("Halting pipeline due to error in dataset combination")
+        sys.exit(1)
+    
+    # Data Preprocessing
+    if not run_module("src.pipeline.preprocessing", skip_errors=False):
+        logging.error("Halting pipeline due to error in data preprocessing")
+        sys.exit(1)
+    
+    # Feature Engineering
+    if not run_module("src.pipeline.feature_engineering", skip_errors=False):
+        logging.error("Halting pipeline due to error in feature engineering")
+        sys.exit(1)
+    
+    # Model Training 
+    if not run_module("src.pipeline.training", skip_errors=False):
+        logging.error("Halting pipeline due to error in model training")
+        sys.exit(1)
+    
+    logging.info("=== ML Pipeline Completed Successfully ===")
 
 if __name__ == "__main__":
-    run_pipeline() 
+    main() 

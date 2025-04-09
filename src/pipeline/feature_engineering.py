@@ -17,9 +17,9 @@ PROCESSED_FEATURES_DIR = PROJECT_ROOT / "data" / "features"
 MODELS_DIR = PROJECT_ROOT / "models"
 
 # Input file from preprocessing step
-INPUT_FILENAME = "bitcoin_macro_preprocessed.csv"  # Updated filename
+INPUT_FILENAME = "bitcoin_macro_preprocessed_trading_days.csv"  # Opdateret til trading days version
 # Output file
-OUTPUT_FILENAME = "bitcoin_features.csv"  # Updated filename
+OUTPUT_FILENAME = "bitcoin_features_trading_days.csv"  # Opdateret til trading days version
 
 # Feature Engineering Parameters
 PRICE_COLUMN = 'price' # Assuming 'price' is the column name after preprocessing
@@ -195,55 +195,107 @@ def calculate_market_features(data):
 
 def calculate_macro_features(data):
     """Calculate macroeconomic-based features"""
-    # Check if macroeconomic columns exist
-    macro_columns = ['cpi', 'fed_rate', 'dxy', 'sp500']
+    # Check for macroeconomic columns
+    macro_columns = [
+        'treasury_10y', 'treasury_30y', 'treasury_5y', 'vix', 
+        'fed_rate', 'dxy', 'sp500', 'nasdaq', 'dow', 
+        'gold', 'oil', 'eurusd'
+    ]
     available_columns = [col for col in macro_columns if col in data.columns]
     
     if not available_columns:
         logging.warning("No macroeconomic indicators found in dataset")
         return data
     
-    logging.info(f"Found the following macroeconomic indicators: {available_columns}")
+    logging.info(f"Found {len(available_columns)} macroeconomic indicators: {available_columns}")
     
-    # Fed rate lag features
+    # Treasury yield features
+    for treasury in ['treasury_10y', 'treasury_30y', 'treasury_5y']:
+        if treasury in data.columns:
+            data[f'{treasury}_lag_1'] = data[treasury].shift(1)
+            data[f'{treasury}_change'] = data[treasury] - data[f'{treasury}_lag_1']
+            data[f'{treasury}_diff_7d'] = data[treasury] - data[treasury].shift(7)
+            data[f'{treasury}_ma7'] = data[treasury].rolling(window=7).mean()
+            data[f'{treasury}_volatility'] = data[treasury].rolling(window=14).std()
+    
+    # Fed rate features
     if 'fed_rate' in data.columns:
         data['fed_rate_lag_1'] = data['fed_rate'].shift(1)
         data['fed_rate_change'] = data['fed_rate'] - data['fed_rate_lag_1']
         data['fed_rate_diff_7d'] = data['fed_rate'] - data['fed_rate'].shift(7)
+        data['fed_rate_ma7'] = data['fed_rate'].rolling(window=7).mean()
     
-    # CPI features
-    if 'cpi' in data.columns:
-        data['cpi_mom'] = data['cpi'].pct_change(periods=1)
-        data['cpi_3m'] = data['cpi'].pct_change(periods=90)
-        data['cpi_6m'] = data['cpi'].pct_change(periods=180)
+    # Volatility index features
+    if 'vix' in data.columns:
+        data['vix_lag_1'] = data['vix'].shift(1)
+        data['vix_change'] = data['vix'] - data['vix_lag_1']
+        data['vix_ma7'] = data['vix'].rolling(window=7).mean()
+        data['vix_ma30'] = data['vix'].rolling(window=30).mean()
+        data['vix_rsi_14'] = calculate_rsi(data['vix'], periods=14)
     
     # DXY (Dollar Index) features
     if 'dxy' in data.columns:
-        data['dxy_change'] = data['dxy'].pct_change(periods=1)
+        data['dxy_lag_1'] = data['dxy'].shift(1)
+        data['dxy_change'] = data['dxy'] - data['dxy_lag_1']
         data['dxy_ma7'] = data['dxy'].rolling(window=7).mean()
         data['dxy_ma30'] = data['dxy'].rolling(window=30).mean()
         data['dxy_volatility'] = data['dxy'].rolling(window=14).std()
-        
-        # DXY RSI
         data['dxy_rsi_14'] = calculate_rsi(data['dxy'], periods=14)
     
-    # S&P 500 features
-    if 'sp500' in data.columns:
-        data['sp500_change'] = data['sp500'].pct_change(periods=1)
-        data['sp500_ma7'] = data['sp500'].rolling(window=7).mean()
-        data['sp500_ma30'] = data['sp500'].rolling(window=30).mean()
-        data['sp500_volatility'] = data['sp500'].rolling(window=14).std()
+    # Stock market indices features (S&P 500, NASDAQ, Dow Jones)
+    for index in ['sp500', 'nasdaq', 'dow']:
+        if index in data.columns:
+            data[f'{index}_lag_1'] = data[index].shift(1)
+            data[f'{index}_change'] = data[index] - data[f'{index}_lag_1']
+            data[f'{index}_ma7'] = data[index].rolling(window=7).mean()
+            data[f'{index}_ma30'] = data[index].rolling(window=30).mean()
+            data[f'{index}_volatility'] = data[index].rolling(window=14).std()
+            data[f'{index}_rsi_14'] = calculate_rsi(data[index], periods=14)
+            
+            # Correlation between Bitcoin and stock indices
+            data[f'btc_{index}_corr_30d'] = data['price'].rolling(window=30).corr(data[index])
+    
+    # Commodities features (Gold, Oil)
+    for commodity in ['gold', 'oil']:
+        if commodity in data.columns:
+            data[f'{commodity}_lag_1'] = data[commodity].shift(1)
+            data[f'{commodity}_change'] = data[commodity] - data[f'{commodity}_lag_1']
+            data[f'{commodity}_ma7'] = data[commodity].rolling(window=7).mean()
+            data[f'{commodity}_volatility'] = data[commodity].rolling(window=14).std()
+            data[f'{commodity}_rsi_14'] = calculate_rsi(data[commodity], periods=14)
+            
+            # Correlation between Bitcoin and commodities
+            data[f'btc_{commodity}_corr_30d'] = data['price'].rolling(window=30).corr(data[commodity])
+    
+    # Forex features (EUR/USD)
+    if 'eurusd' in data.columns:
+        data['eurusd_lag_1'] = data['eurusd'].shift(1)
+        data['eurusd_change'] = data['eurusd'] - data['eurusd_lag_1']
+        data['eurusd_ma7'] = data['eurusd'].rolling(window=7).mean()
+        data['eurusd_volatility'] = data['eurusd'].rolling(window=14).std()
+        data['eurusd_rsi_14'] = calculate_rsi(data['eurusd'], periods=14)
         
-        # S&P 500 RSI
-        data['sp500_rsi_14'] = calculate_rsi(data['sp500'], periods=14)
+        # Correlation between Bitcoin and EUR/USD
+        data['btc_eurusd_corr_30d'] = data['price'].rolling(window=30).corr(data['eurusd'])
     
-    # Correlation between Bitcoin and S&P 500 (rolling 30-day correlation)
-    if 'sp500' in data.columns:
-        data['btc_sp500_corr_30d'] = data['price'].rolling(window=30).corr(data['sp500'])
+    # Cross-asset correlations
+    if 'dxy' in data.columns and 'eurusd' in data.columns:
+        data['dxy_eurusd_corr_30d'] = data['dxy'].rolling(window=30).corr(data['eurusd'])
     
-    # Correlation between Bitcoin and DXY (rolling 30-day correlation)
-    if 'dxy' in data.columns:
-        data['btc_dxy_corr_30d'] = data['price'].rolling(window=30).corr(data['dxy'])
+    if 'gold' in data.columns and 'dxy' in data.columns:
+        data['gold_dxy_corr_30d'] = data['gold'].rolling(window=30).corr(data['dxy'])
+    
+    if 'oil' in data.columns and 'dxy' in data.columns:
+        data['oil_dxy_corr_30d'] = data['oil'].rolling(window=30).corr(data['dxy'])
+    
+    # Feature ratios
+    if 'vix' in data.columns and 'sp500' in data.columns:
+        data['vix_to_sp500'] = data['vix'] / data['sp500']
+    
+    if 'gold' in data.columns and 'sp500' in data.columns:
+        data['gold_to_sp500'] = data['gold'] / data['sp500']
+    
+    logging.info(f"Generated {len(data.columns) - len(available_columns)} macroeconomic features")
     
     return data
 
@@ -252,20 +304,32 @@ def main():
     logging.info("Starting feature engineering")
     
     try:
-        # Indlæs rå data
-        data_dir = Path(__file__).resolve().parents[2] / "data"
-        raw_data_path = data_dir / "raw" / "crypto" / "bitcoin_usd_365d.csv"
-        features_data_path = data_dir / "features" / "bitcoin_usd_365d_features.csv"
-        
-        # Opret output mappe hvis den ikke findes
-        features_data_path.parent.mkdir(parents=True, exist_ok=True)
+        # Indlæs præprocesseret data med både Bitcoin og makroøkonomisk data
+        input_file = INPUT_FILE_PATH
         
         # Indlæs data
-        df = pd.read_csv(raw_data_path, index_col='timestamp', parse_dates=True)
-        logging.info(f"Indlæste data fra {raw_data_path}")
+        df = load_data(input_file)
+        if df is None:
+            return
         
-        # Generer features
+        logging.info("Starting feature engineering...")
+        
+        # Generer basis-features
         features_df = create_features(df)
+        if features_df is None:
+            return
+        
+        # Generer market features
+        features_df = calculate_market_features(features_df)
+        
+        # Generer makroøkonomiske features
+        features_df = calculate_macro_features(features_df)
+        
+        # Drop rows with NaNs after all feature generation
+        initial_rows = len(features_df)
+        features_df.dropna(inplace=True)
+        final_rows = len(features_df)
+        logging.info(f"Dropped {initial_rows - final_rows} rows due to NaN values from feature creation.")
         
         # Save features
         output_file = PROCESSED_FEATURES_DIR / OUTPUT_FILENAME
