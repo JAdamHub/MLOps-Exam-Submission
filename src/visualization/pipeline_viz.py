@@ -81,11 +81,13 @@ def create_pipeline_visualization():
         c.attr(label='Visualization')
         c.attr('node', fillcolor='lightblue')
         c.node('pipeline_viz', 'Pipeline Visualization\n(pipeline_viz.py)')
-        c.node('performance_viz', 'Performance Visualization\n(performance_viz.py)')
+        c.node('model_viz', 'Model Visualizations\n(models/figures/)')
+        c.node('evaluation_viz', 'Evaluation Visualizations\n(evaluation.py)')
         
         # Visualization flow
-        c.edge('model_metrics', 'performance_viz')
-        c.edge('evaluation', 'performance_viz')
+        c.edge('model_metrics', 'model_viz')
+        c.edge('evaluation', 'evaluation_viz')
+        c.edge('model_viz', 'evaluation_viz')
     
     # Save visualization
     output_dir = Path('visualizations')
