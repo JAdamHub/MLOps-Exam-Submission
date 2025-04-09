@@ -1,0 +1,4 @@
+venv/
+opt/
+venv/**
+opt/**
