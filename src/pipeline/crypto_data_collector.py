@@ -12,18 +12,18 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 # Determine project root based on script location
 # Assumes the script is in src/pipeline
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-RAW_DATA_DIR = PROJECT_ROOT / "data" / "raw"
+RAW_DATA_DIR = PROJECT_ROOT / "data" / "raw" / "crypto"  # Updated path for cryptocurrency data
 API_BASE_URL = "https://api.coingecko.com/api/v3"
 # Example: Fetch Bitcoin data in USD for the last year
 COIN_ID = "bitcoin"
 VS_CURRENCY = "usd"
 DAYS = 365 # Number of days of historical data
-TARGET_FILENAME = f"{COIN_ID}_{VS_CURRENCY}_{DAYS}d_raw.csv"
+TARGET_FILENAME = f"{COIN_ID}_{VS_CURRENCY}_365d.csv"  # Simplified filename
 API_ENDPOINT = f"/coins/{COIN_ID}/market_chart"
 MAX_RETRIES = 3
 RETRY_DELAY = 5 # seconds
 
-# Ensure raw data directory exists
+# Ensure data directory exists
 RAW_DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 def fetch_data(endpoint: str, params: dict) -> dict | None:
@@ -86,7 +86,7 @@ def save_data(data: dict, filename: Path) -> bool:
 
 def main():
     """Main function to run the data ingestion process."""
-    logging.info("--- Starting Data Ingestion ---")
+    logging.info("--- Starting Cryptocurrency Data Collection ---")
     params = {
         'vs_currency': VS_CURRENCY,
         'days': str(DAYS),
@@ -96,13 +96,13 @@ def main():
 
     if raw_data:
         if save_data(raw_data, TARGET_FILENAME):
-            logging.info("--- Data Ingestion Completed Successfully ---")
+            logging.info("--- Cryptocurrency Data Collection Completed Successfully ---")
         else:
-            logging.error("--- Data Ingestion Failed (Save Error) ---")
+            logging.error("--- Cryptocurrency Data Collection Failed (Save Error) ---")
             sys.exit(1) # Exit with error code
     else:
-        logging.error("--- Data Ingestion Failed (Fetch Error) ---")
+        logging.error("--- Cryptocurrency Data Collection Failed (Fetch Error) ---")
         sys.exit(1) # Exit with error code
 
 if __name__ == "__main__":
-    main()
+    main() 

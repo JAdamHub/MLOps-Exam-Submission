@@ -5,141 +5,258 @@ from pathlib import Path
 
 # Konfigurer logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
 
-class FeatureEngineer:
-    """Klasse til at generere features fra rå data."""
+# --- Configuration ---
+# Determine project root based on script location
+# Assumes the script is in src/pipeline
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+INTERMEDIATE_PREPROCESSED_DIR = PROJECT_ROOT / "data" / "intermediate" / "preprocessed"  # Updated path
+PROCESSED_FEATURES_DIR = PROJECT_ROOT / "data" / "processed" / "features"  # Updated path
+
+# Input file from preprocessing step
+INPUT_FILENAME = "bitcoin_macro_preprocessed.csv"  # Updated filename
+# Output file
+OUTPUT_FILENAME = "bitcoin_features.csv"  # Updated filename
+
+# Feature Engineering Parameters
+PRICE_COLUMN = 'price' # Assuming 'price' is the column name after preprocessing
+LAG_PERIODS = [1, 3, 7] # Lag periods in days
+SMA_WINDOWS = [7, 30] # Simple Moving Average windows in days
+VOLATILITY_WINDOW = 14 # Window for rolling standard deviation (volatility)
+TARGET_SHIFT = -1 # Predict next day's price movement
+
+# Ensure output directory exists
+PROCESSED_FEATURES_DIR.mkdir(parents=True, exist_ok=True)
+
+INPUT_FILE_PATH = INTERMEDIATE_PREPROCESSED_DIR / INPUT_FILENAME
+OUTPUT_FILE_PATH = PROCESSED_FEATURES_DIR / OUTPUT_FILENAME
+
+def load_data(filepath: Path) -> pd.DataFrame | None:
+    """Loads data from a CSV file."""
+    if not filepath.exists():
+        logging.error(f"Input file not found: {filepath}")
+        return None
+    try:
+        df = pd.read_csv(filepath, index_col='timestamp', parse_dates=True)
+        logging.info(f"Processed data loaded successfully from {filepath}")
+        return df
+    except Exception as e:
+        logging.error(f"Error loading data from {filepath}: {e}")
+        return None
+
+def create_features(df: pd.DataFrame) -> pd.DataFrame | None:
+    """Generates features for the model."""
+    if PRICE_COLUMN not in df.columns:
+        logging.error(f"Required column '{PRICE_COLUMN}' not found in the DataFrame.")
+        return None
+
+    try:
+        logging.info("Starting feature engineering...")
+        features_df = df.copy()
+
+        # 1. Lagged Features
+        for lag in LAG_PERIODS:
+            features_df[f'{PRICE_COLUMN}_lag_{lag}'] = df[PRICE_COLUMN].shift(lag)
+            logging.debug(f"Created lag feature: {PRICE_COLUMN}_lag_{lag}")
+
+        # 2. Moving Averages
+        for window in SMA_WINDOWS:
+            features_df[f'{PRICE_COLUMN}_sma_{window}'] = df[PRICE_COLUMN].rolling(window=window, min_periods=1).mean()
+            logging.debug(f"Created SMA feature: {PRICE_COLUMN}_sma_{window}")
+
+        # 3. Volatility
+        features_df[f'{PRICE_COLUMN}_volatility_{VOLATILITY_WINDOW}'] = df[PRICE_COLUMN].rolling(window=VOLATILITY_WINDOW, min_periods=1).std()
+        logging.debug(f"Created volatility feature: {PRICE_COLUMN}_volatility_{VOLATILITY_WINDOW}")
+
+        # 4. Time-based Features
+        features_df['day_of_week'] = df.index.dayofweek
+        features_df['month'] = df.index.month
+        features_df['year'] = df.index.year # Keep year if useful for longer trends
+        logging.debug("Created time-based features: day_of_week, month, year")
+
+        # 5. Target Variable: Price up (1) or down/same (0) tomorrow?
+        features_df['target_price_next_day'] = df[PRICE_COLUMN].shift(TARGET_SHIFT)
+        features_df['target_price_up'] = (features_df['target_price_next_day'] > df[PRICE_COLUMN]).astype(int)
+        features_df.drop(columns=['target_price_next_day'], inplace=True) # Drop the intermediate column
+        logging.debug("Created target variable: target_price_up")
+
+        # Drop rows with NaNs introduced by lags/rolling windows/target shift
+        initial_rows = len(features_df)
+        features_df.dropna(inplace=True)
+        final_rows = len(features_df)
+        logging.info(f"Dropped {initial_rows - final_rows} rows due to NaN values from feature creation.")
+
+        if features_df.empty:
+            logging.error("DataFrame is empty after feature engineering and NaN removal.")
+            return None
+
+        logging.info("Feature engineering completed.")
+        return features_df
+
+    except Exception as e:
+        logging.error(f"Error during feature engineering: {e}", exc_info=True)
+        return None
+
+def save_features(df: pd.DataFrame, filepath: Path):
+    """Saves the features DataFrame to a CSV file."""
+    try:
+        df.to_csv(filepath)
+        logging.info(f"Features data saved successfully to {filepath}")
+    except Exception as e:
+        logging.error(f"Error saving features data to {filepath}: {e}")
+        sys.exit(1)
+
+def calculate_rsi(data, periods=14):
+    """Calculate RSI (Relative Strength Index)"""
+    delta = data.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=periods).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=periods).mean()
+    rs = gain / loss
+    return 100 - (100 / (1 + rs))
+
+def calculate_macd(data, fast=12, slow=26, signal=9):
+    """Calculate MACD (Moving Average Convergence Divergence)"""
+    exp1 = data.ewm(span=fast, adjust=False).mean()
+    exp2 = data.ewm(span=slow, adjust=False).mean()
+    macd = exp1 - exp2
+    signal_line = macd.ewm(span=signal, adjust=False).mean()
+    return macd, signal_line
+
+def calculate_bollinger_bands(data, window=20):
+    """Calculate Bollinger Bands"""
+    sma = data.rolling(window=window).mean()
+    std = data.rolling(window=window).std()
+    upper_band = sma + (std * 2)
+    lower_band = sma - (std * 2)
+    return upper_band, sma, lower_band
+
+def calculate_adx(data, period=14):
+    """Calculate Average Directional Index (ADX)"""
+    high = data['high']
+    low = data['low']
+    close = data['price']
     
-    def __init__(self):
-        """Initialiserer FeatureEngineer med standard parametre."""
-        self.price_column = 'price'
-        self.volume_column = 'total_volume'
-        self.market_cap_column = 'market_cap'
+    # Calculate True Range
+    tr1 = high - low
+    tr2 = abs(high - close.shift(1))
+    tr3 = abs(low - close.shift(1))
+    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+    atr = tr.rolling(window=period).mean()
+    
+    # Calculate Directional Movement
+    up_move = high - high.shift(1)
+    down_move = low.shift(1) - low
+    
+    plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0)
+    minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0)
+    
+    # Calculate Directional Indicators
+    plus_di = 100 * pd.Series(plus_dm).rolling(window=period).mean() / atr
+    minus_di = 100 * pd.Series(minus_dm).rolling(window=period).mean() / atr
+    
+    # Calculate ADX
+    dx = 100 * abs(plus_di - minus_di) / (plus_di + minus_di)
+    adx = dx.rolling(window=period).mean()
+    
+    return adx, plus_di, minus_di
+
+def calculate_stochastic(data, k_period=14, d_period=3):
+    """Calculate Stochastic Oscillator"""
+    low_min = data['low'].rolling(window=k_period).min()
+    high_max = data['high'].rolling(window=k_period).max()
+    
+    k = 100 * (data['price'] - low_min) / (high_max - low_min)
+    d = k.rolling(window=d_period).mean()
+    
+    return k, d
+
+def calculate_market_features(data):
+    """Calculate market-based features"""
+    # Market cap to volume ratio (with safety check)
+    data['market_cap_to_volume'] = np.where(
+        data['total_volume'] != 0,
+        data['market_cap'] / data['total_volume'],
+        0
+    )
+    
+    # Market cap momentum
+    data['market_cap_momentum_1'] = data['market_cap'].pct_change(periods=1)
+    data['market_cap_momentum_7'] = data['market_cap'].pct_change(periods=7)
+    data['market_cap_momentum_30'] = data['market_cap'].pct_change(periods=30)
+    
+    # Volume to market cap ratio (with safety check)
+    data['volume_to_market_cap'] = np.where(
+        data['market_cap'] != 0,
+        data['total_volume'] / data['market_cap'],
+        0
+    )
+    
+    return data
+
+def calculate_macro_features(data):
+    """Calculate macroeconomic-based features"""
+    # Check if macroeconomic columns exist
+    macro_columns = ['cpi', 'fed_rate', 'dxy', 'sp500']
+    available_columns = [col for col in macro_columns if col in data.columns]
+    
+    if not available_columns:
+        logging.warning("No macroeconomic indicators found in dataset")
+        return data
+    
+    logging.info(f"Found the following macroeconomic indicators: {available_columns}")
+    
+    # Fed rate lag features
+    if 'fed_rate' in data.columns:
+        data['fed_rate_lag_1'] = data['fed_rate'].shift(1)
+        data['fed_rate_change'] = data['fed_rate'] - data['fed_rate_lag_1']
+        data['fed_rate_diff_7d'] = data['fed_rate'] - data['fed_rate'].shift(7)
+    
+    # CPI features
+    if 'cpi' in data.columns:
+        data['cpi_mom'] = data['cpi'].pct_change(periods=1)
+        data['cpi_3m'] = data['cpi'].pct_change(periods=90)
+        data['cpi_6m'] = data['cpi'].pct_change(periods=180)
+    
+    # DXY (Dollar Index) features
+    if 'dxy' in data.columns:
+        data['dxy_change'] = data['dxy'].pct_change(periods=1)
+        data['dxy_ma7'] = data['dxy'].rolling(window=7).mean()
+        data['dxy_ma30'] = data['dxy'].rolling(window=30).mean()
+        data['dxy_volatility'] = data['dxy'].rolling(window=14).std()
         
-        # Tekniske indikatorer parametre
-        self.lag_periods = [1, 3, 7]
-        self.sma_windows = [7, 30]
-        self.volatility_window = 14
-        self.rsi_periods = [7, 14, 21]
-        self.macd_params = {'fast': 12, 'slow': 26, 'signal': 9}
-        self.bb_window = 20
+        # DXY RSI
+        data['dxy_rsi_14'] = calculate_rsi(data['dxy'], periods=14)
+    
+    # S&P 500 features
+    if 'sp500' in data.columns:
+        data['sp500_change'] = data['sp500'].pct_change(periods=1)
+        data['sp500_ma7'] = data['sp500'].rolling(window=7).mean()
+        data['sp500_ma30'] = data['sp500'].rolling(window=30).mean()
+        data['sp500_volatility'] = data['sp500'].rolling(window=14).std()
         
-        # Target variabel
-        self.target_shift = -1  # Prædiker næste dags prisbevægelse
+        # S&P 500 RSI
+        data['sp500_rsi_14'] = calculate_rsi(data['sp500'], periods=14)
     
-    def calculate_rsi(self, data: pd.Series, period: int) -> pd.Series:
-        """Beregner Relative Strength Index (RSI)."""
-        delta = data.diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-        rs = gain / loss
-        return 100 - (100 / (1 + rs))
+    # Correlation between Bitcoin and S&P 500 (rolling 30-day correlation)
+    if 'sp500' in data.columns:
+        data['btc_sp500_corr_30d'] = data['price'].rolling(window=30).corr(data['sp500'])
     
-    def calculate_macd(self, data: pd.Series) -> tuple:
-        """Beregner Moving Average Convergence Divergence (MACD)."""
-        exp1 = data.ewm(span=self.macd_params['fast'], adjust=False).mean()
-        exp2 = data.ewm(span=self.macd_params['slow'], adjust=False).mean()
-        macd = exp1 - exp2
-        signal = macd.ewm(span=self.macd_params['signal'], adjust=False).mean()
-        histogram = macd - signal
-        return macd, signal, histogram
+    # Correlation between Bitcoin and DXY (rolling 30-day correlation)
+    if 'dxy' in data.columns:
+        data['btc_dxy_corr_30d'] = data['price'].rolling(window=30).corr(data['dxy'])
     
-    def calculate_bollinger_bands(self, data: pd.Series) -> tuple:
-        """Beregner Bollinger Bands."""
-        sma = data.rolling(window=self.bb_window).mean()
-        std = data.rolling(window=self.bb_window).std()
-        upper = sma + (std * 2)
-        lower = sma - (std * 2)
-        width = (upper - lower) / sma
-        position = (data - lower) / (upper - lower)
-        return upper, sma, lower, width, position
-    
-    def create_features(self, df: pd.DataFrame) -> pd.DataFrame:
-        """
-        Genererer features fra input data.
-        
-        Args:
-            df: DataFrame med rå data
-            
-        Returns:
-            DataFrame med genererede features
-        """
-        try:
-            logger.info("Starter feature engineering...")
-            features_df = df.copy()
-            
-            # 1. Lagged Features
-            for lag in self.lag_periods:
-                features_df[f'price_lag_{lag}'] = df[self.price_column].shift(lag)
-            
-            # 2. Moving Averages
-            for window in self.sma_windows:
-                features_df[f'price_sma_{window}'] = df[self.price_column].rolling(window=window).mean()
-                features_df[f'volume_sma_{window}'] = df[self.volume_column].rolling(window=window).mean()
-            
-            # 3. Volatility
-            features_df['price_volatility_14'] = df[self.price_column].rolling(window=self.volatility_window).std()
-            
-            # 4. RSI
-            for period in self.rsi_periods:
-                features_df[f'rsi_{period}'] = self.calculate_rsi(df[self.price_column], period)
-            
-            # 5. MACD
-            macd, signal, histogram = self.calculate_macd(df[self.price_column])
-            features_df['macd'] = macd
-            features_df['macd_signal'] = signal
-            features_df['macd_histogram'] = histogram
-            
-            # 6. Bollinger Bands
-            upper, middle, lower, width, position = self.calculate_bollinger_bands(df[self.price_column])
-            features_df['bb_upper'] = upper
-            features_df['bb_middle'] = middle
-            features_df['bb_lower'] = lower
-            features_df['bb_width'] = width
-            features_df['bb_position'] = position
-            
-            # 7. Volume Features
-            features_df['volume_ratio'] = df[self.volume_column] / features_df['volume_sma_7']
-            features_df['volume_ratio_30'] = df[self.volume_column] / features_df['volume_sma_30']
-            features_df['volume_momentum'] = df[self.volume_column].pct_change(periods=1)
-            
-            # 8. Price Momentum
-            for period in [1, 7, 30, 90]:
-                features_df[f'price_momentum_{period}'] = df[self.price_column].pct_change(periods=period)
-            
-            # 9. Market Features
-            features_df['market_cap_to_volume'] = df[self.market_cap_column] / df[self.volume_column]
-            features_df['market_cap_momentum_1'] = df[self.market_cap_column].pct_change(periods=1)
-            features_df['market_cap_momentum_7'] = df[self.market_cap_column].pct_change(periods=7)
-            features_df['market_cap_momentum_30'] = df[self.market_cap_column].pct_change(periods=30)
-            
-            # 10. Time Features
-            features_df['day_of_week'] = df.index.dayofweek
-            features_df['month'] = df.index.month
-            features_df['year'] = df.index.year
-            features_df['day_of_month'] = df.index.day
-            features_df['is_weekend'] = features_df['day_of_week'].isin([5, 6]).astype(int)
-            
-            # 11. Target Variable
-            features_df['target'] = (df[self.price_column].shift(self.target_shift) > df[self.price_column]).astype(int)
-            
-            # Fjern rækker med NaN værdier
-            initial_rows = len(features_df)
-            features_df.dropna(inplace=True)
-            final_rows = len(features_df)
-            logger.info(f"Fjernet {initial_rows - final_rows} rækker med NaN værdier")
-            
-            return features_df
-            
-        except Exception as e:
-            logger.error(f"Fejl under feature engineering: {str(e)}")
-            raise
+    return data
 
 def main():
     """Hovedfunktion til at køre feature engineering."""
     try:
-        # Initialiser FeatureEngineer
-        engineer = FeatureEngineer()
+        # Load processed data
+        input_file = INTERMEDIATE_PREPROCESSED_DIR / INPUT_FILENAME
+        df = pd.read_csv(input_file)
+        logging.info(f"Processed data loaded successfully from {input_file}")
+        
+        # Convert timestamp to datetime
+        df['timestamp'] = pd.to_datetime(df['timestamp'])
         
         # Indlæs rå data
         data_dir = Path(__file__).resolve().parents[2] / "data"
@@ -156,9 +273,12 @@ def main():
         # Generer features
         features_df = engineer.create_features(df)
         
-        # Gem features
-        features_df.to_csv(features_data_path)
-        logger.info(f"Gemte features til {features_data_path}")
+        # Save features
+        output_file = PROCESSED_FEATURES_DIR / OUTPUT_FILENAME
+        df.to_csv(output_file, index=False)
+        logging.info(f"Features data saved successfully to {output_file}")
+        
+        logging.info("--- Feature Engineering Completed Successfully ---")
         
     except Exception as e:
         logger.error(f"Fejl i main: {str(e)}")
