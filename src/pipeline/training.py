@@ -32,14 +32,20 @@ def prepare_data(df):
     """Prepare data for training."""
     # Separate features and target
     feature_columns = [col for col in df.columns if col not in ['timestamp', 'target_price_up']]
-    X = df[feature_columns].values  # Convert to numpy array after selecting features
+    X = df[feature_columns]  # Keep as DataFrame to preserve column names
     y = df['target_price_up'].values
     
     # Scale features
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
     
-    return X_scaled, y, feature_columns, scaler
+    # Create a new DataFrame with scaled values and original column names
+    X_scaled_df = pd.DataFrame(X_scaled, columns=X.columns)
+    
+    # Add feature names to scaler
+    scaler.feature_names_in_ = X.columns
+    
+    return X_scaled_df.values, y, feature_columns, scaler
 
 def train_model(X, y, feature_columns):
     """
@@ -121,6 +127,11 @@ def save_model(model, scaler, cv_scores, feature_importance):
         scaler_path = MODELS_DIR / "scaler.joblib"
         joblib.dump(scaler, scaler_path)
         logging.info(f"Scaler saved successfully to {scaler_path}")
+        
+        # Save feature names
+        feature_names_path = MODELS_DIR / "feature_names.joblib"
+        joblib.dump(list(feature_importance.keys()), feature_names_path)
+        logging.info(f"Feature names saved successfully to {feature_names_path}")
         
         # Calculate and save average metrics
         metrics = {
