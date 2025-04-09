@@ -5,6 +5,10 @@ from datetime import datetime, timedelta
 import requests
 import json
 import joblib
+import os
+
+# API URL configuration - default for local dev, overridden by environment variable in Docker
+API_URL = os.environ.get('API_URL', 'http://localhost:8000')
 
 # Configure Streamlit page
 st.set_page_config(
@@ -19,6 +23,18 @@ st.markdown("""
 This is a simple model to predict whether the Bitcoin price will rise or fall tomorrow.
 Note: This is for educational purposes only and should not be used as financial advice.
 """)
+
+# Navigation
+st.sidebar.title("Navigation")
+page = st.sidebar.radio("Go to", ["Prediction", "Monitoring"])
+
+if page == "Monitoring":
+    # Import og vis monitoring-siden
+    import src.streamlit.monitoring as monitoring
+    # Denne import vil køre monitoring-siden
+    st.stop()  # Stop denne side for at undgå dobbelt rendering
+    
+# Resten af koden køres kun hvis vi er på Prediction-siden
 
 # Load scaler at startup
 try:
@@ -126,23 +142,15 @@ def make_prediction(data):
             'is_weekend': int(data['is_weekend'])
         }
         
-        # Debug: Vis data der sendes til API
-        st.write("Debug - Sending data to API:")
-        st.json(prediction_data)
+        # Send request til API - brug API_URL miljøvariabel
+        api_endpoint = f"{API_URL}/predict"
+        st.info(f"Sender anmodning til API: {api_endpoint}")
         
-        # Send request til API
         response = requests.post(
-            "http://localhost:8000/predict",
+            api_endpoint,
             json=prediction_data,
             headers={"Content-Type": "application/json"}
         )
-        
-        # Debug: Vis API response status
-        st.write(f"Debug - API Response Status: {response.status_code}")
-        
-        # Debug: Vis API response indhold
-        st.write("Debug - API Response Content:")
-        st.write(response.text)
         
         if response.status_code == 200:
             result = response.json()
@@ -223,6 +231,11 @@ with col2:
                 # Display probability
                 probability = prediction.get('probability', 0)
                 st.markdown(f"### Probability: {probability*100:.1f}%")
+                
+                # Show prediction timestamp if available
+                if 'timestamp' in prediction:
+                    timestamp = prediction.get('timestamp')
+                    st.info(f"Prediction generated at: {timestamp}")
                 
                 # Display latest price data
                 st.markdown("### Latest Price Data:")

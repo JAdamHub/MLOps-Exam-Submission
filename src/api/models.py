@@ -115,3 +115,5 @@ class PredictionResponse(BaseModel):
     """
     prediction: int # 0 for price not up, 1 for price up
     probability: float # Probability of the price being up (class 1)
+    timestamp: str # ISO format timestamp of when the prediction was made
+    features_used: list # List of features used for the prediction

@@ -1,0 +1,45 @@
+# Brug samme base image som API'en
+FROM python:3.10-slim
+
+# Sæt miljøvariabler
+ENV PYTHONDONTWRITEBYTECODE 1
+ENV PYTHONUNBUFFERED 1
+ENV API_URL=http://api:8000
+
+# Installér system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Sæt arbejdsmappen i containeren
+WORKDIR /app
+
+# Installér Python dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt \
+    && pip install --no-cache-dir plotly matplotlib seaborn
+
+# Opret nødvendige mapper til monitoring visualiseringer
+RUN mkdir -p /app/models/figures /app/data/predictions
+
+# Kopier kun nødvendige filer
+COPY src/ src/
+COPY models/ models/
+COPY data/ data/
+COPY .env .env
+
+# Sørg for at mapperne har korrekte tilladelser
+RUN chmod -R 755 /app/data
+RUN chmod -R 755 /app/models
+
+# Streamlit kører på port 8501 som standard
+EXPOSE 8501
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8501/_stcore/health || exit 1
+
+# Kør Streamlit appen
+CMD ["streamlit", "run", "src/streamlit/app.py", "--server.port=8501", "--server.address=0.0.0.0"] 
