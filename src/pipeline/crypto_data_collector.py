@@ -20,7 +20,7 @@ API_BASE_URL = "https://api.coingecko.com/api/v3"
 # Example: Fetch Bitcoin data in USD for the last year
 COIN_ID = "bitcoin"
 VS_CURRENCY = "usd"
-DAYS = 365 # Number of days of historical data
+DAYS = 3650 # Number of days of historical data
 TARGET_FILENAME = f"{COIN_ID}_{VS_CURRENCY}_365d.csv"  # Simplified filename
 TARGET_TRADING_DAYS_FILENAME = f"{COIN_ID}_{VS_CURRENCY}_trading_days.csv"  # Ny fil med kun handelsdage
 API_ENDPOINT = f"/coins/{COIN_ID}/market_chart"
