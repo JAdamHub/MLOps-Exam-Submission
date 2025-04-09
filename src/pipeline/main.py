@@ -7,8 +7,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.append(str(PROJECT_ROOT))
 
 # Import the main functions from each pipeline step
-from pipeline import ingestion, preprocessing, feature_engineering, training
-from pipeline import makro_data_collector, combined_data_processor  # Import nye moduler
+from pipeline import crypto_data_collector, preprocessing, feature_engineering, training
+from pipeline import macro_economic_collector, combined_data_processor  # Updated module names
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -18,14 +18,14 @@ def run_pipeline():
     logging.info("========== Starting Full Pipeline Execution ==========")
 
     try:
-        # Step 1: Data Ingestion
-        logging.info("--- Running Data Ingestion ---")
-        ingestion.main()
-        logging.info("--- Data Ingestion Finished ---")
+        # Step 1: Cryptocurrency Data Collection
+        logging.info("--- Running Cryptocurrency Data Collection ---")
+        crypto_data_collector.main()
+        logging.info("--- Cryptocurrency Data Collection Finished ---")
 
         # Step 2: Macroeconomic Data Collection
         logging.info("--- Running Macroeconomic Data Collection ---")
-        collector = makro_data_collector.MacroDataCollector()
+        collector = macro_economic_collector.MacroDataCollector()
         collector.collect_all_macro_data()
         logging.info("--- Macroeconomic Data Collection Finished ---")
         

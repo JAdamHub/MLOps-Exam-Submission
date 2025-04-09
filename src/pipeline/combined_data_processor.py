@@ -9,31 +9,32 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 # --- Configuration ---
 # Determine project root based on script location
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-RAW_DATA_DIR = PROJECT_ROOT / "data" / "raw"
-MACRO_DATA_DIR = PROJECT_ROOT / "data" / "macro"
-COMBINED_DATA_DIR = PROJECT_ROOT / "data" / "combined"
+RAW_CRYPTO_DIR = PROJECT_ROOT / "data" / "raw" / "crypto"
+RAW_MACRO_DIR = PROJECT_ROOT / "data" / "raw" / "macro"
+INTERMEDIATE_DIR = PROJECT_ROOT / "data" / "intermediate" / "combined"
 
 # Input files
-BITCOIN_FILENAME = "bitcoin_usd_365d_raw.csv"
-MACRO_FILENAME = "macro_economic_data.csv"
+BITCOIN_FILENAME = "bitcoin_usd_365d.csv"
+MACRO_FILENAME = "macro_economic.csv"
 
 # Output file
 OUTPUT_FILENAME = "bitcoin_macro_combined.csv"
 
 # Ensure output directory exists
-COMBINED_DATA_DIR.mkdir(parents=True, exist_ok=True)
+INTERMEDIATE_DIR.mkdir(parents=True, exist_ok=True)
 
 def load_bitcoin_data():
     """Load Bitcoin data from raw directory"""
     try:
-        bitcoin_path = RAW_DATA_DIR / BITCOIN_FILENAME
+        bitcoin_path = RAW_CRYPTO_DIR / BITCOIN_FILENAME
         if not bitcoin_path.exists():
             logging.error(f"Bitcoin data file not found: {bitcoin_path}")
             return None
             
         df = pd.read_csv(bitcoin_path)
         # Ensure timestamp is in datetime format
-        df['timestamp'] = pd.to_datetime(df['timestamp'])
+        if 'timestamp' in df.columns:
+            df['timestamp'] = pd.to_datetime(df['timestamp'])
         logging.info(f"Bitcoin data loaded successfully from {bitcoin_path}")
         return df
     except Exception as e:
@@ -43,14 +44,16 @@ def load_bitcoin_data():
 def load_macro_data():
     """Load macroeconomic data"""
     try:
-        macro_path = MACRO_DATA_DIR / MACRO_FILENAME
+        macro_path = RAW_MACRO_DIR / MACRO_FILENAME
         if not macro_path.exists():
             logging.error(f"Macro data file not found: {macro_path}")
             return None
             
         df = pd.read_csv(macro_path)
-        # Ensure date column is in datetime format
-        df.index = pd.to_datetime(df.index)
+        # Handle the index column, which likely contains the date
+        if 'Unnamed: 0' in df.columns:
+            df['date'] = pd.to_datetime(df['Unnamed: 0'])
+            df.drop(columns=['Unnamed: 0'], inplace=True)
         logging.info(f"Macroeconomic data loaded successfully from {macro_path}")
         return df
     except Exception as e:
@@ -64,36 +67,64 @@ def combine_datasets(bitcoin_df, macro_df):
             logging.error("Cannot combine datasets: one or both datasets are missing")
             return None
             
-        # Set bitcoin_df index to timestamp for merging
-        bitcoin_df.set_index('timestamp', inplace=True)
+        # Make a copy to avoid warnings
+        bitcoin_df = bitcoin_df.copy()
+        macro_df = macro_df.copy()
         
-        # Resample macro data to daily frequency if needed
-        if macro_df.index.freq != 'D':
-            macro_df = macro_df.resample('D').ffill()
+        # Ensure there is a timestamp/date column in both datasets
+        if 'date' not in macro_df.columns and 'timestamp' not in macro_df.columns:
+            logging.error("Macro data missing a date or timestamp column")
+            return None
+            
+        # Standardize column names
+        if 'date' in macro_df.columns and 'timestamp' in bitcoin_df.columns:
+            macro_df['timestamp'] = macro_df['date']
+            macro_df.drop(columns=['date'], inplace=True, errors='ignore')
+            
+        # Merge datasets
+        logging.info(f"Bitcoin data shape before merge: {bitcoin_df.shape}")
+        logging.info(f"Macro data shape before merge: {macro_df.shape}")
+        logging.info(f"Bitcoin columns: {bitcoin_df.columns.tolist()}")
+        logging.info(f"Macro columns: {macro_df.columns.tolist()}")
         
-        # Merge datasets on date
+        # Merge based on timestamp
         combined_df = pd.merge(
-            bitcoin_df, 
+            bitcoin_df,
             macro_df,
-            left_index=True, 
-            right_index=True, 
+            on='timestamp',
             how='left'
         )
         
-        # Forward fill missing macro values (for weekends/holidays)
-        combined_df.ffill(inplace=True)
+        logging.info(f"Combined shape after merge: {combined_df.shape}")
+        
+        # Check for NaN values
+        nan_cols = combined_df.columns[combined_df.isna().any()].tolist()
+        if nan_cols:
+            logging.warning(f"NaN values found in the following columns after merge: {nan_cols}")
+            # Forward/backward fill to handle NaN values
+            combined_df = combined_df.ffill().bfill()
+            
+        # Check again if there are still NaN values
+        nan_rows = combined_df.isna().any(axis=1).sum()
+        if nan_rows > 0:
+            logging.warning(f"There are still {nan_rows} rows with NaN values after ffill/bfill")
+            # If there are still NaN values, replace them with 0 for numeric columns
+            for col in combined_df.select_dtypes(include=['float64', 'int64']).columns:
+                combined_df[col] = combined_df[col].fillna(0)
         
         logging.info(f"Datasets combined successfully. Shape: {combined_df.shape}")
         return combined_df
     except Exception as e:
         logging.error(f"Error combining datasets: {e}")
+        import traceback
+        logging.error(traceback.format_exc())
         return None
 
 def save_combined_data(df):
     """Save combined dataset to file"""
     try:
-        output_path = COMBINED_DATA_DIR / OUTPUT_FILENAME
-        df.to_csv(output_path)
+        output_path = INTERMEDIATE_DIR / OUTPUT_FILENAME
+        df.to_csv(output_path, index=False)
         logging.info(f"Combined data saved successfully to {output_path}")
         return True
     except Exception as e:

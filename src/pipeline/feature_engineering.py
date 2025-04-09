@@ -11,13 +11,13 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 # Determine project root based on script location
 # Assumes the script is in src/pipeline
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-PROCESSED_DATA_DIR = PROJECT_ROOT / "data" / "processed"
-FEATURES_DATA_DIR = PROJECT_ROOT / "data" / "features"
+INTERMEDIATE_PREPROCESSED_DIR = PROJECT_ROOT / "data" / "intermediate" / "preprocessed"  # Updated path
+PROCESSED_FEATURES_DIR = PROJECT_ROOT / "data" / "processed" / "features"  # Updated path
 
 # Input file from preprocessing step
-INPUT_FILENAME = "bitcoin_usd_365d_processed.csv"
+INPUT_FILENAME = "bitcoin_macro_preprocessed.csv"  # Updated filename
 # Output file
-OUTPUT_FILENAME = "bitcoin_usd_365d_features.csv"
+OUTPUT_FILENAME = "bitcoin_features.csv"  # Updated filename
 
 # Feature Engineering Parameters
 PRICE_COLUMN = 'price' # Assuming 'price' is the column name after preprocessing
@@ -27,10 +27,10 @@ VOLATILITY_WINDOW = 14 # Window for rolling standard deviation (volatility)
 TARGET_SHIFT = -1 # Predict next day's price movement
 
 # Ensure output directory exists
-FEATURES_DATA_DIR.mkdir(parents=True, exist_ok=True)
+PROCESSED_FEATURES_DIR.mkdir(parents=True, exist_ok=True)
 
-INPUT_FILE_PATH = PROCESSED_DATA_DIR / INPUT_FILENAME
-OUTPUT_FILE_PATH = FEATURES_DATA_DIR / OUTPUT_FILENAME
+INPUT_FILE_PATH = INTERMEDIATE_PREPROCESSED_DIR / INPUT_FILENAME
+OUTPUT_FILE_PATH = PROCESSED_FEATURES_DIR / OUTPUT_FILENAME
 
 def load_data(filepath: Path) -> pd.DataFrame | None:
     """Loads data from a CSV file."""
@@ -196,15 +196,15 @@ def calculate_market_features(data):
 
 def calculate_macro_features(data):
     """Calculate macroeconomic-based features"""
-    # Tjek om makroøkonomiske kolonner findes
+    # Check if macroeconomic columns exist
     macro_columns = ['cpi', 'fed_rate', 'dxy', 'sp500']
     available_columns = [col for col in macro_columns if col in data.columns]
     
     if not available_columns:
-        logging.warning("Ingen makroøkonomiske indikatorer fundet i datasættet")
+        logging.warning("No macroeconomic indicators found in dataset")
         return data
     
-    logging.info(f"Fandt følgende makroøkonomiske indikatorer: {available_columns}")
+    logging.info(f"Found the following macroeconomic indicators: {available_columns}")
     
     # Fed rate lag features
     if 'fed_rate' in data.columns:
@@ -238,11 +238,11 @@ def calculate_macro_features(data):
         # S&P 500 RSI
         data['sp500_rsi_14'] = calculate_rsi(data['sp500'], periods=14)
     
-    # Correlation mellem Bitcoin og S&P 500 (rullende 30-dages korrelation)
+    # Correlation between Bitcoin and S&P 500 (rolling 30-day correlation)
     if 'sp500' in data.columns:
         data['btc_sp500_corr_30d'] = data['price'].rolling(window=30).corr(data['sp500'])
     
-    # Correlation mellem Bitcoin og DXY (rullende 30-dages korrelation)
+    # Correlation between Bitcoin and DXY (rolling 30-day correlation)
     if 'dxy' in data.columns:
         data['btc_dxy_corr_30d'] = data['price'].rolling(window=30).corr(data['dxy'])
     
@@ -254,7 +254,7 @@ def main():
     
     try:
         # Load processed data
-        input_file = PROCESSED_DATA_DIR / "bitcoin_usd_365d_processed.csv"
+        input_file = INTERMEDIATE_PREPROCESSED_DIR / INPUT_FILENAME
         df = pd.read_csv(input_file)
         logging.info(f"Processed data loaded successfully from {input_file}")
         
@@ -360,7 +360,7 @@ def main():
         logging.info(f"Dropped {len(df)} rows due to NaN values from feature creation.")
         
         # Save features
-        output_file = FEATURES_DATA_DIR / "bitcoin_usd_365d_features.csv"
+        output_file = PROCESSED_FEATURES_DIR / OUTPUT_FILENAME
         df.to_csv(output_file, index=False)
         logging.info(f"Features data saved successfully to {output_file}")
         
