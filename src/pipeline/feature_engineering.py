@@ -107,26 +107,211 @@ def save_features(df: pd.DataFrame, filepath: Path):
         logging.error(f"Error saving features data to {filepath}: {e}")
         sys.exit(1)
 
+def calculate_rsi(data, periods=14):
+    """Calculate RSI (Relative Strength Index)"""
+    delta = data.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=periods).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=periods).mean()
+    rs = gain / loss
+    return 100 - (100 / (1 + rs))
+
+def calculate_macd(data, fast=12, slow=26, signal=9):
+    """Calculate MACD (Moving Average Convergence Divergence)"""
+    exp1 = data.ewm(span=fast, adjust=False).mean()
+    exp2 = data.ewm(span=slow, adjust=False).mean()
+    macd = exp1 - exp2
+    signal_line = macd.ewm(span=signal, adjust=False).mean()
+    return macd, signal_line
+
+def calculate_bollinger_bands(data, window=20):
+    """Calculate Bollinger Bands"""
+    sma = data.rolling(window=window).mean()
+    std = data.rolling(window=window).std()
+    upper_band = sma + (std * 2)
+    lower_band = sma - (std * 2)
+    return upper_band, sma, lower_band
+
+def calculate_adx(data, period=14):
+    """Calculate Average Directional Index (ADX)"""
+    high = data['high']
+    low = data['low']
+    close = data['price']
+    
+    # Calculate True Range
+    tr1 = high - low
+    tr2 = abs(high - close.shift(1))
+    tr3 = abs(low - close.shift(1))
+    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+    atr = tr.rolling(window=period).mean()
+    
+    # Calculate Directional Movement
+    up_move = high - high.shift(1)
+    down_move = low.shift(1) - low
+    
+    plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0)
+    minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0)
+    
+    # Calculate Directional Indicators
+    plus_di = 100 * pd.Series(plus_dm).rolling(window=period).mean() / atr
+    minus_di = 100 * pd.Series(minus_dm).rolling(window=period).mean() / atr
+    
+    # Calculate ADX
+    dx = 100 * abs(plus_di - minus_di) / (plus_di + minus_di)
+    adx = dx.rolling(window=period).mean()
+    
+    return adx, plus_di, minus_di
+
+def calculate_stochastic(data, k_period=14, d_period=3):
+    """Calculate Stochastic Oscillator"""
+    low_min = data['low'].rolling(window=k_period).min()
+    high_max = data['high'].rolling(window=k_period).max()
+    
+    k = 100 * (data['price'] - low_min) / (high_max - low_min)
+    d = k.rolling(window=d_period).mean()
+    
+    return k, d
+
+def calculate_market_features(data):
+    """Calculate market-based features"""
+    # Market cap to volume ratio (with safety check)
+    data['market_cap_to_volume'] = np.where(
+        data['total_volume'] != 0,
+        data['market_cap'] / data['total_volume'],
+        0
+    )
+    
+    # Market cap momentum
+    data['market_cap_momentum_1'] = data['market_cap'].pct_change(periods=1)
+    data['market_cap_momentum_7'] = data['market_cap'].pct_change(periods=7)
+    data['market_cap_momentum_30'] = data['market_cap'].pct_change(periods=30)
+    
+    # Volume to market cap ratio (with safety check)
+    data['volume_to_market_cap'] = np.where(
+        data['market_cap'] != 0,
+        data['total_volume'] / data['market_cap'],
+        0
+    )
+    
+    return data
+
 def main():
     """Main function to run the feature engineering process."""
     logging.info("--- Starting Feature Engineering ---")
-
-    # Load preprocessed data
-    processed_df = load_data(INPUT_FILE_PATH)
-    if processed_df is None:
-        logging.error("Halting feature engineering due to load error.")
-        sys.exit(1)
-
-    # Create features
-    features_df = create_features(processed_df)
-    if features_df is None:
-        logging.error("Halting feature engineering due to processing error.")
-        sys.exit(1)
-
-    # Save features data
-    save_features(features_df, OUTPUT_FILE_PATH)
-
-    logging.info("--- Feature Engineering Completed Successfully ---")
+    
+    try:
+        # Load processed data
+        input_file = PROCESSED_DATA_DIR / "bitcoin_usd_365d_processed.csv"
+        df = pd.read_csv(input_file)
+        logging.info(f"Processed data loaded successfully from {input_file}")
+        
+        # Convert timestamp to datetime
+        df['timestamp'] = pd.to_datetime(df['timestamp'])
+        
+        # Basic price features
+        df['price_lag_1'] = df['price'].shift(1)
+        df['price_lag_3'] = df['price'].shift(3)
+        df['price_lag_7'] = df['price'].shift(7)
+        df['price_sma_7'] = df['price'].rolling(window=7).mean()
+        df['price_sma_30'] = df['price'].rolling(window=30).mean()
+        df['price_volatility_14'] = df['price'].rolling(window=14).std()
+        
+        # RSI with multiple periods
+        df['rsi_14'] = calculate_rsi(df['price'], periods=14)
+        df['rsi_7'] = calculate_rsi(df['price'], periods=7)
+        df['rsi_21'] = calculate_rsi(df['price'], periods=21)
+        
+        # MACD with different parameters
+        df['macd'], df['macd_signal'] = calculate_macd(df['price'])
+        df['macd_histogram'] = df['macd'] - df['macd_signal']
+        df['macd_fast'], df['macd_signal_fast'] = calculate_macd(df['price'], fast=8, slow=17, signal=9)
+        
+        # Bollinger Bands with different windows
+        df['bb_upper'], df['bb_middle'], df['bb_lower'] = calculate_bollinger_bands(df['price'])
+        df['bb_width'] = np.where(
+            df['bb_middle'] != 0,
+            (df['bb_upper'] - df['bb_lower']) / df['bb_middle'],
+            0
+        )
+        df['bb_position'] = np.where(
+            (df['bb_upper'] - df['bb_lower']) != 0,
+            (df['price'] - df['bb_lower']) / (df['bb_upper'] - df['bb_lower']),
+            0.5
+        )
+        
+        # Volume indicators with more windows
+        df['volume_sma_7'] = df['total_volume'].rolling(window=7).mean()
+        df['volume_sma_30'] = df['total_volume'].rolling(window=30).mean()
+        df['volume_ratio'] = np.where(
+            df['volume_sma_7'] != 0,
+            df['total_volume'] / df['volume_sma_7'],
+            1
+        )
+        df['volume_ratio_30'] = np.where(
+            df['volume_sma_30'] != 0,
+            df['total_volume'] / df['volume_sma_30'],
+            1
+        )
+        df['volume_momentum'] = df['total_volume'].pct_change(periods=1)
+        
+        # Price momentum with more periods
+        df['price_momentum_1'] = df['price'].pct_change(periods=1)
+        df['price_momentum_7'] = df['price'].pct_change(periods=7)
+        df['price_momentum_30'] = df['price'].pct_change(periods=30)
+        df['price_momentum_90'] = df['price'].pct_change(periods=90)
+        
+        # Price volatility with different windows
+        df['volatility_7'] = df['price'].rolling(window=7).std()
+        df['volatility_14'] = df['price'].rolling(window=14).std()
+        df['volatility_30'] = df['price'].rolling(window=30).std()
+        
+        # Market-based features
+        df = calculate_market_features(df)
+        
+        # Interaction features
+        df['price_volatility_ratio'] = np.where(
+            df['volatility_30'] != 0,
+            df['volatility_7'] / df['volatility_30'],
+            1
+        )
+        df['momentum_volatility_ratio'] = np.where(
+            df['volatility_14'] != 0,
+            df['price_momentum_7'] / df['volatility_14'],
+            0
+        )
+        df['volume_price_ratio'] = np.where(
+            df['price'] != 0,
+            df['total_volume'] / df['price'],
+            0
+        )
+        
+        # Time-based features with more granularity
+        df['day_of_week'] = df['timestamp'].dt.dayofweek
+        df['month'] = df['timestamp'].dt.month
+        df['year'] = df['timestamp'].dt.year
+        df['day_of_month'] = df['timestamp'].dt.day
+        df['is_weekend'] = df['day_of_week'].isin([5, 6]).astype(int)
+        
+        # Target variable (next day's price movement)
+        df['target_price_up'] = (df['price'].shift(-1) > df['price']).astype(int)
+        
+        # Drop rows with NaN values
+        df = df.dropna()
+        
+        # Replace infinite values with 0
+        df = df.replace([np.inf, -np.inf], 0)
+        
+        logging.info(f"Dropped {len(df)} rows due to NaN values from feature creation.")
+        
+        # Save features
+        output_file = FEATURES_DATA_DIR / "bitcoin_usd_365d_features.csv"
+        df.to_csv(output_file, index=False)
+        logging.info(f"Features data saved successfully to {output_file}")
+        
+        logging.info("--- Feature Engineering Completed Successfully ---")
+        
+    except Exception as e:
+        logging.error(f"Error during feature engineering: {e}")
+        raise
 
 if __name__ == "__main__":
     main()
