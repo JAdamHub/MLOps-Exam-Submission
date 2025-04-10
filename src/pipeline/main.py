@@ -14,11 +14,17 @@ def run_module(module_name, skip_errors=False):
         logging.info(f"Starting module: {module_name}")
         module = importlib.import_module(module_name)
         if hasattr(module, 'main'):
-            module.main()
+            result = module.main()
+            # Check if the module returns a boolean success status
+            if isinstance(result, bool):
+                if not result and not skip_errors:
+                    logging.warning(f"Module {module_name} returned False, indicating errors")
+                    return False
+            logging.info(f"Completed module: {module_name}")
+            return True
         else:
             logging.warning(f"Module {module_name} has no main() function")
-        logging.info(f"Completed module: {module_name}")
-        return True
+            return skip_errors
     except Exception as e:
         logging.error(f"Error running {module_name}: {e}")
         if not skip_errors:
@@ -29,12 +35,11 @@ def main():
     """
     Main function to run the entire data pipeline.
     Processing steps:
-    1. Collect cryptocurrency data (Bitcoin)
-    2. Collect macroeconomic data
-    3. Combine datasets (kun handelsdage - US stock market åbningsdage)
-    4. Preprocess combined data
-    5. Feature engineering
-    6. Train machine learning model
+    1. Collect stock data (Vestas) and macroeconomic data
+    2. Combine datasets (kun handelsdage - danske børs åbningsdage)
+    3. Preprocess combined data
+    4. Feature engineering
+    5. Train machine learning model
     """
     # Load environment variables from .env file
     dotenv_path = Path(__file__).resolve().parents[2] / ".env"
@@ -45,17 +50,14 @@ def main():
         logging.warning(f".env file not found at {dotenv_path}")
         
     logging.info("=== Starting ML Pipeline ===")
-    logging.info("BEMÆRK: Denne pipeline arbejder kun med data fra handelsdage (US stock market åbningsdage)")
+    logging.info("BEMÆRK: Denne pipeline arbejder kun med data fra handelsdage (danske børs åbningsdage)")
     
-    # Data Collection steps
-    if not run_module("src.pipeline.crypto_data_collector", skip_errors=False):
-        logging.error("Halting pipeline due to error in crypto data collection")
-        sys.exit(1)
-    
-    # Kører makroøkonomisk datahentning (nu med Yahoo Finance)
-    if not run_module("src.pipeline.macro_economic_collector", skip_errors=False):
-        logging.error("Halting pipeline due to error in macro economic data collection")
-        sys.exit(1)
+    # Data Collection steps - indsamler både Vestas aktiedata og makroøkonomiske data
+    # Brug skip_errors=True, da vi har implementeret fallback-mekanismer i stock_data_collector.py
+    if not run_module("src.pipeline.stock_data_collector", skip_errors=True):
+        logging.warning("Stock data collection encountered errors but continuing with fallback data")
+    else:
+        logging.info("Stock data collection completed successfully")
     
     # Data Integration
     if not run_module("src.pipeline.combined_data_processor", skip_errors=False):

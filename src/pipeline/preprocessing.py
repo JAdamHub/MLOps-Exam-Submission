@@ -17,9 +17,9 @@ INTERMEDIATE_PREPROCESSED_DIR = PROJECT_ROOT / "data" / "intermediate" / "prepro
 MODELS_DIR = PROJECT_ROOT / "models"
 
 # Input file from combined data step
-INPUT_FILENAME = "bitcoin_macro_combined_trading_days.csv"
+INPUT_FILENAME = "vestas_macro_combined_trading_days.csv"
 # Output files
-OUTPUT_FILENAME = "bitcoin_macro_preprocessed_trading_days.csv"  # Opdateret filnavn
+OUTPUT_FILENAME = "vestas_macro_preprocessed_trading_days.csv"  # Opdateret filnavn til Vestas
 SCALER_FILENAME = "minmax_scaler.joblib"
 
 # Ensure output directories exist
@@ -36,9 +36,11 @@ def load_data(filepath: Path) -> pd.DataFrame | None:
         logging.error(f"Input file not found: {filepath}")
         return None
     try:
-        df = pd.read_csv(filepath)
+        # Indlæs data med første kolonne som indeks (dato)
+        df = pd.read_csv(filepath, index_col=0, parse_dates=True)
         logging.info(f"Data loaded successfully from {filepath}")
-        logging.info(f"Data shape: {df.shape}, columns: {df.columns.tolist()}")
+        logging.info(f"Data shape: {df.shape}, columns: {len(df.columns)}")
+        logging.info(f"Sample columns: {df.columns[:5].tolist()}...")
         
         # Check for empty values
         if df.empty:
@@ -50,63 +52,73 @@ def load_data(filepath: Path) -> pd.DataFrame | None:
         if missing_count > 0:
             logging.warning(f"Found {missing_count} missing values in input data")
             
-        # Convert timestamp to datetime if it exists
-        if 'timestamp' in df.columns:
-            df['timestamp'] = pd.to_datetime(df['timestamp'])
-        
         return df
     except Exception as e:
         logging.error(f"Error loading data from {filepath}: {e}")
         return None
 
 def preprocess_data(df: pd.DataFrame) -> tuple[pd.DataFrame | None, MinMaxScaler | None]:
-    """Handles missing values and scales numerical features."""
+    """
+    Preprocess data: handle missing values, create features, and scale
+    
+    Args:
+        df: Raw Vestas data with macroeconomic indicators
+        
+    Returns:
+        Preprocessed data and scaler
+    """
     try:
-        # Ensure we have a copy of the dataframe
-        df = df.copy()
         logging.info(f"Starting preprocessing with data shape: {df.shape}")
         
-        # Determine if timestamp should be the index
-        if 'timestamp' in df.columns:
-            df.set_index('timestamp', inplace=True)
-            logging.info("Set timestamp as index")
-            
-        # Handle missing values - Forward fill is common for time series
-        original_rows = len(df)
-        logging.info("Handling missing values using forward fill (last known value) and backward fill (first future known value)")
-        logging.info("For weekend data in macroeconomic indicators, this preserves Friday's values throughout the weekend")
-        df.ffill(inplace=True) # Forward fill
-        df.bfill(inplace=True) # Back fill any remaining NaNs at the beginning
+        # Ensure we have a copy to avoid warnings
+        df = df.copy()
         
-        # If there are still NaN values after fill, replace them with 0 for numeric columns
-        for col in df.select_dtypes(include=['float64', 'int64']).columns:
-            df[col] = df[col].fillna(0)
+        # Add percentage change column if not already present
+        if 'pct_change' not in df.columns and 'close' in df.columns:
+            df['pct_change'] = df['close'].pct_change() * 100
+            # Ret FutureWarning ved at bruge assignment i stedet for inplace
+            df['pct_change'] = df['pct_change'].fillna(0)
+            logging.info("Added percent change column for close price")
             
-        # Check again for NaN values
-        nan_rows = df.isna().any(axis=1).sum()
-        if nan_rows > 0:
-            logging.warning(f"There are still {nan_rows} rows with NaN values. Removing these rows.")
-            df.dropna(inplace=True)
-            if df.empty:
-                logging.error("DataFrame is empty after handling NaNs.")
-                return None, None
+        # Add volatility (standard deviation of returns over rolling window)
+        if 'close' in df.columns and 'volatility_14d' not in df.columns:
+            df['volatility_14d'] = df['close'].pct_change().rolling(window=14).std() * 100
+            # Ret FutureWarning ved at bruge assignment i stedet for inplace
+            df['volatility_14d'] = df['volatility_14d'].fillna(df['volatility_14d'].mean())
+            logging.info("Added 14-day volatility column")
+        
+        # Handle missing values - first check if there are any
+        missing_before = df.isna().sum().sum()
+        logging.info(f"Original missing values: {missing_before}")
+        
+        if missing_before > 0:
+            logging.info("Handling missing values using forward fill followed by backward fill")
+            # Ret FutureWarning - undgå inplace=True
+            df = df.ffill().bfill()
+            
+        missing_after = df.isna().sum().sum()
+        logging.info(f"Missing values handled. Original missing: {missing_before}, Remaining: {missing_after}")
+        logging.info(f"Data shape after handling missing values: {df.shape}")
 
-        logging.info(f"Missing values handled. Original rows: {original_rows}, Final rows: {len(df)}")
-
-        # Scaling numerical features
+        # Apply scaling to numerical columns only
+        # We should not scale date/categorical columns
         numerical_cols = df.select_dtypes(include=['float64', 'int64']).columns
-        logging.info(f"Numerical columns to scale: {numerical_cols.tolist()}")
         
-        if numerical_cols.empty:
+        if not numerical_cols.empty:
+            # Initializer scaler and fit it to the data
+            scaler = MinMaxScaler()
+            scaled_data = scaler.fit_transform(df[numerical_cols])
+            
+            # Erstat kolonner i stedet for at bruge inplace=True
+            for i, col in enumerate(numerical_cols):
+                df[col] = scaled_data[:, i]
+                
+            logging.info(f"Scaled {len(numerical_cols)} numerical columns: {list(numerical_cols)}")
+            return df, scaler
+        else:
             logging.warning("No numerical columns found to scale.")
-            return df, None # Return dataframe without scaling if no numerical cols
-
-        scaler = MinMaxScaler()
-        df_scaled = scaler.fit_transform(df[numerical_cols])
-        df[numerical_cols] = df_scaled # Update original df with scaled values
-
-        logging.info(f"Numerical features scaled using MinMaxScaler")
-        return df, scaler
+            scaler = None
+            return df, scaler
     except Exception as e:
         logging.error(f"Error during preprocessing: {e}")
         import traceback
@@ -116,9 +128,10 @@ def preprocess_data(df: pd.DataFrame) -> tuple[pd.DataFrame | None, MinMaxScaler
 def save_processed_data(df: pd.DataFrame, filepath: Path):
     """Saves the processed DataFrame to a CSV file."""
     try:
-        # Save with index (timestamp)
+        # Save with date index
         df.to_csv(filepath)
         logging.info(f"Processed data saved successfully to {filepath}")
+        logging.info(f"Final data shape: {df.shape}")
     except Exception as e:
         logging.error(f"Error saving processed data to {filepath}: {e}")
         sys.exit(1)
@@ -134,7 +147,7 @@ def save_scaler(scaler: MinMaxScaler, filepath: Path):
 
 def main():
     """Main function to run the data preprocessing process."""
-    logging.info("--- Starting Data Preprocessing ---")
+    logging.info("--- Starting Vestas Data Preprocessing ---")
 
     # Load data
     raw_df = load_data(INPUT_FILE_PATH)
@@ -143,7 +156,7 @@ def main():
         sys.exit(1)
 
     # Preprocess data
-    processed_df, scaler = preprocess_data(raw_df) # Use copy to avoid modifying original df in place if needed elsewhere
+    processed_df, scaler = preprocess_data(raw_df)
     if processed_df is None:
         logging.error("Halting preprocessing due to processing error.")
         sys.exit(1)
@@ -157,7 +170,7 @@ def main():
     else:
         logging.warning("Scaler was not created during preprocessing, skipping save.")
 
-    logging.info("--- Data Preprocessing Completed Successfully ---")
+    logging.info("--- Vestas Data Preprocessing Completed Successfully ---")
 
 if __name__ == "__main__":
     main()

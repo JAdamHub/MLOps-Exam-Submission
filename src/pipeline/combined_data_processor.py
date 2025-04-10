@@ -10,215 +10,287 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 # --- Configuration ---
 # Determine project root based on script location
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-RAW_CRYPTO_DIR = PROJECT_ROOT / "data" / "raw" / "crypto"
+RAW_STOCKS_DIR = PROJECT_ROOT / "data" / "raw" / "stocks"
 RAW_MACRO_DIR = PROJECT_ROOT / "data" / "raw" / "macro"
 INTERMEDIATE_DIR = PROJECT_ROOT / "data" / "intermediate" / "combined"
 
-# Input files - Opdateret til at bruge handelsdage filer
-BITCOIN_FILENAME = "bitcoin_usd_trading_days.csv"  # Opdateret til handelsdage fil
-MACRO_FILENAME = "macro_economic_trading_days.csv"  # Opdateret til handelsdage fil
+# Input files - Vestas aktiedata
+# Daglige data filer
+VESTAS_DAILY_FILENAME = "vestas_daily.csv"
+MACRO_DAILY_FILENAME = "macro_economic_trading_days.csv"
 
-# Output file
-OUTPUT_FILENAME = "bitcoin_macro_combined_trading_days.csv"  # Opdateret navn
+# Output files
+OUTPUT_DAILY_FILENAME = "vestas_macro_combined_trading_days.csv"
 
 # Ensure output directory exists
 INTERMEDIATE_DIR.mkdir(parents=True, exist_ok=True)
 
-def load_bitcoin_data():
-    """Load Bitcoin data from raw directory"""
+def load_vestas_data(interval="daily"):
+    """
+    Load Vestas stock data from raw directory
+    
+    Args:
+        interval: for nu kun "daily" understøttet
+    """
     try:
-        bitcoin_path = RAW_CRYPTO_DIR / BITCOIN_FILENAME
-        if not bitcoin_path.exists():
-            logging.error(f"Bitcoin data file not found: {bitcoin_path}")
+        if interval == "daily":
+            filename = VESTAS_DAILY_FILENAME
+        else:
+            logging.error(f"Unsupported interval: {interval}. Only 'daily' is supported for Vestas data.")
             return None
             
-        df = pd.read_csv(bitcoin_path)
-        # Ensure timestamp is in datetime format
-        if 'timestamp' in df.columns:
-            df['timestamp'] = pd.to_datetime(df['timestamp'])
-        logging.info(f"Bitcoin trading days data loaded successfully from {bitcoin_path}")
+        vestas_path = RAW_STOCKS_DIR / filename
+        if not vestas_path.exists():
+            logging.error(f"Vestas {interval} data file not found: {vestas_path}")
+            return None
+            
+        df = pd.read_csv(vestas_path)
+        
+        # Ensure timestamp/date is in datetime format
+        if 'Unnamed: 0' in df.columns:
+            df['date'] = pd.to_datetime(df['Unnamed: 0'])
+            df.drop(columns=['Unnamed: 0'], inplace=True)
+        elif 'date' not in df.columns:
+            # Hvis filen allerede har et indeks, men intet datofelt
+            df['date'] = pd.to_datetime(df.index)
+            
+        # Sæt dato som indeks
+        if 'date' in df.columns:
+            df.set_index('date', inplace=True)
+            
+        logging.info(f"Vestas {interval} data loaded successfully from {vestas_path}")
+        logging.info(f"Vestas data columns: {df.columns.tolist()}")
+        logging.info(f"Vestas data shape: {df.shape}")
+        
         return df
     except Exception as e:
-        logging.error(f"Error loading Bitcoin data: {e}")
+        logging.error(f"Error loading Vestas {interval} data: {e}")
         return None
 
-def load_macro_data():
-    """Load macroeconomic data"""
+def load_macro_data(interval="daily"):
+    """
+    Load macroeconomic data
+    
+    Args:
+        interval: for nu kun "daily" understøttet
+    """
     try:
-        macro_path = RAW_MACRO_DIR / MACRO_FILENAME
+        if interval == "daily":
+            filename = MACRO_DAILY_FILENAME
+        else:
+            logging.error(f"Unsupported interval: {interval}. Only 'daily' is supported.")
+            return None
+            
+        macro_path = RAW_MACRO_DIR / filename
         if not macro_path.exists():
-            logging.error(f"Macro data file not found: {macro_path}")
+            logging.error(f"Macro {interval} data file not found: {macro_path}")
             return None
             
         df = pd.read_csv(macro_path)
+        
         # Handle the index column, which likely contains the date
         if 'Unnamed: 0' in df.columns:
             df['date'] = pd.to_datetime(df['Unnamed: 0'])
             df.drop(columns=['Unnamed: 0'], inplace=True)
-        logging.info(f"Macroeconomic trading days data loaded successfully from {macro_path}")
+            df.set_index('date', inplace=True)
+        
+        logging.info(f"Macroeconomic {interval} data loaded successfully from {macro_path}")
+        logging.info(f"Macro data columns: {df.columns.tolist()}")
+        logging.info(f"Macro data shape: {df.shape}")
+        
         return df
     except Exception as e:
-        logging.error(f"Error loading macroeconomic data: {e}")
+        logging.error(f"Error loading macroeconomic {interval} data: {e}")
         return None
 
-def combine_datasets(bitcoin_df, macro_df):
-    """Combine Bitcoin and macroeconomic datasets"""
+def combine_datasets(vestas_df, macro_df, interval="daily"):
+    """
+    Combine Vestas stock and macroeconomic datasets
+    
+    Args:
+        vestas_df: Vestas dataframe
+        macro_df: Macroeconomic dataframe
+        interval: for nu kun "daily" understøttet
+    """
     try:
-        if bitcoin_df is None or macro_df is None:
+        if vestas_df is None or macro_df is None:
             logging.error("Cannot combine datasets: one or both datasets are missing")
             return None
             
         # Make a copy to avoid warnings
-        bitcoin_df = bitcoin_df.copy()
+        vestas_df = vestas_df.copy()
         macro_df = macro_df.copy()
         
-        # Ensure there is a timestamp/date column in both datasets
-        if 'date' not in macro_df.columns and 'timestamp' not in macro_df.columns:
-            logging.error("Macro data missing a date or timestamp column")
-            return None
-            
-        # Standardize column names
-        if 'date' in macro_df.columns and 'timestamp' not in macro_df.columns:
-            macro_df['timestamp'] = macro_df['date']
-            macro_df.drop(columns=['date'], inplace=True, errors='ignore')
-            
-        # Konverter 'Unnamed: 0' kolonner til timestamp kolonner
-        if 'Unnamed: 0' in bitcoin_df.columns and 'timestamp' not in bitcoin_df.columns:
-            logging.info("Konverterer 'Unnamed: 0' til timestamp kolonne i Bitcoin data")
-            bitcoin_df['timestamp'] = pd.to_datetime(bitcoin_df['Unnamed: 0'])
+        # Kontroller at begge datasæt har dato som indeks
+        if not isinstance(vestas_df.index, pd.DatetimeIndex):
+            logging.warning("Vestas data does not have DatetimeIndex, attempting to convert")
+            if 'date' in vestas_df.columns:
+                vestas_df.set_index('date', inplace=True)
+            else:
+                logging.error("Cannot find date column in Vestas data")
+                return None
+                
+        if not isinstance(macro_df.index, pd.DatetimeIndex):
+            logging.warning("Macro data does not have DatetimeIndex, attempting to convert")
+            if 'date' in macro_df.columns:
+                macro_df.set_index('date', inplace=True)
+            else:
+                logging.error("Cannot find date column in Macro data")
+                return None
+                
+        # Debug logs for at tjekke indeks formater
+        logging.info(f"Vestas {interval} index eksempler: {vestas_df.index[:3].tolist()}")
+        logging.info(f"Macro {interval} index eksempler: {macro_df.index[:3].tolist()}")
         
-        if 'Unnamed: 0' in macro_df.columns and 'timestamp' not in macro_df.columns:
-            logging.info("Konverterer 'Unnamed: 0' til timestamp kolonne i Macro data")
-            macro_df['timestamp'] = pd.to_datetime(macro_df['Unnamed: 0'])
+        # Konverter indeks til samme format for daglige data
+        if interval == "daily":
+            vestas_df.index = pd.to_datetime(vestas_df.index).normalize()
+            macro_df.index = pd.to_datetime(macro_df.index).normalize()
         
-        # Tjek om vi har timestamp kolonner i begge datasæt
-        if 'timestamp' not in bitcoin_df.columns:
-            logging.error("Bitcoin data mangler timestamp kolonne efter konvertering")
-            return None
-            
-        if 'timestamp' not in macro_df.columns:
-            logging.error("Macro data mangler timestamp kolonne efter konvertering")
-            return None
-            
-        # Debug logs for at tjekke timestamp formater
-        logging.info(f"Bitcoin timestamp eksempler: {bitcoin_df['timestamp'].head(3).tolist()}")
-        logging.info(f"Macro timestamp eksempler: {macro_df['timestamp'].head(3).tolist()}")
-        
-        # Konverter timestamp til samme format (dato uden tidspunkt)
-        bitcoin_df['timestamp'] = pd.to_datetime(bitcoin_df['timestamp']).dt.normalize()
-        macro_df['timestamp'] = pd.to_datetime(macro_df['timestamp']).dt.normalize()
-        
-        logging.info(f"Bitcoin timestamp efter normalisering: {bitcoin_df['timestamp'].head(3).tolist()}")
-        logging.info(f"Macro timestamp efter normalisering: {macro_df['timestamp'].head(3).tolist()}")
-        
-        # Merger datasets
-        logging.info(f"Bitcoin data shape before merge: {bitcoin_df.shape}")
-        logging.info(f"Macro data shape before merge: {macro_df.shape}")
-        logging.info(f"Bitcoin columns: {bitcoin_df.columns.tolist()}")
-        logging.info(f"Macro columns: {macro_df.columns.tolist()}")
+        # Merger datasets på indeks (dato)
+        logging.info(f"Vestas {interval} data shape before merge: {vestas_df.shape}")
+        logging.info(f"Macro {interval} data shape before merge: {macro_df.shape}")
         
         # Tjek for overlap i datoer mellem de to datasæt
-        bitcoin_dates = set(bitcoin_df['timestamp'].dt.date)
-        macro_dates = set(macro_df['timestamp'].dt.date)
-        common_dates = bitcoin_dates.intersection(macro_dates)
+        vestas_dates = set(vestas_df.index)
+        macro_dates = set(macro_df.index)
+        common_dates = vestas_dates.intersection(macro_dates)
         
-        logging.info(f"Antal datoer i Bitcoin data: {len(bitcoin_dates)}")
-        logging.info(f"Antal datoer i Macro data: {len(macro_dates)}")
+        logging.info(f"Antal datoer i Vestas {interval} data: {len(vestas_dates)}")
+        logging.info(f"Antal datoer i Macro {interval} data: {len(macro_dates)}")
         logging.info(f"Antal fælles datoer: {len(common_dates)}")
         
         if len(common_dates) == 0:
-            logging.error("Ingen fælles datoer mellem datasættene!")
-            # Hvis der ikke er nogen fælles datoer, brug Bitcoin data og udfyld med tomme værdier
-            logging.warning("Bruger Bitcoin data og udfylder med tomme værdier for makroøkonomiske features")
+            logging.error(f"Ingen fælles datoer mellem {interval} datasættene!")
+            # Hvis der ikke er nogen fælles datoer, brug Vestas data og udfyld med tomme værdier
+            logging.warning(f"Bruger Vestas {interval} data og udfylder med tomme værdier for makroøkonomiske features")
             
-            # Opret en kopi af bitcoin_df og tilføj tomme kolonner for makrodata
-            combined_df = bitcoin_df.copy()
+            # Opret en kopi af vestas_df og tilføj tomme kolonner for makrodata
+            combined_df = vestas_df.copy()
             for col in macro_df.columns:
-                if col != 'timestamp' and col not in combined_df.columns:
+                if col not in combined_df.columns:
                     combined_df[col] = np.nan
-                    
-            logging.info(f"Kombineret datasæt med tomme makro-kolonner: {combined_df.shape}")
         else:
-            # Merge based on timestamp
+            # Brug indre join for at undgå for mange NaN-værdier
             combined_df = pd.merge(
-                bitcoin_df,
+                vestas_df, 
                 macro_df,
-                on='timestamp',
-                how='inner'  # Ændret til 'inner' for kun at beholde datoer der findes i begge datasæt
+                left_index=True, 
+                right_index=True,
+                how='left'  # Behold alle Vestas-datopunkter og match med makro hvor muligt
             )
             
-        logging.info(f"Combined shape after merge: {combined_df.shape}")
+        logging.info(f"Combined {interval} shape after merge: {combined_df.shape}")
         
         # Check for NaN values
         nan_cols = combined_df.columns[combined_df.isna().any()].tolist()
+        nan_percentage = (combined_df.isna().sum() / len(combined_df)) * 100
+        
+        logging.info("Procent af manglende værdier per kolonne:")
+        for col, pct in nan_percentage[nan_percentage > 0].items():
+            logging.info(f"  {col}: {pct:.2f}%")
+            
         if nan_cols:
-            logging.warning(f"NaN values found in the following columns after merge: {nan_cols}")
+            logging.warning(f"NaN values found in {len(nan_cols)} columns after merge in {interval} data")
             logging.info("Applying forward fill (ffill) followed by backward fill (bfill) to handle NaN values")
-            combined_df = combined_df.ffill().bfill()
             
-        # Check again if there are still NaN values
-        nan_rows = combined_df.isna().any(axis=1).sum()
-        if nan_rows > 0:
-            logging.warning(f"There are still {nan_rows} rows with NaN values after ffill/bfill")
-            # If there are still NaN values, replace them with 0 for numeric columns
-            for col in combined_df.select_dtypes(include=['float64', 'int64']).columns:
-                combined_df[col] = combined_df[col].fillna(0)
-        
-        logging.info(f"Datasets combined successfully. Shape: {combined_df.shape}")
-        
-        if not combined_df.empty:
-            logging.info(f"Date range: from {combined_df['timestamp'].min()} to {combined_df['timestamp'].max()}")
-        else:
-            logging.warning("Combined dataset is empty!")
-            
-        logging.info(f"Dataset contains only US trading days (weekdays excluding US holidays)")
-        
+            # For hver kolonne med NaN-værdier, udfyld med ffill -> bfill
+            for col in nan_cols:
+                combined_df[col] = combined_df[col].fillna(method='ffill').fillna(method='bfill')
+                
+            # Tjek for resterende NaN-værdier
+            remaining_nan = combined_df.isna().sum().sum()
+            if remaining_nan > 0:
+                logging.warning(f"There are still {remaining_nan} NaN values after filling")
+                # Udfyld resterende NaN-værdier med 0 (eller en anden passende strategi)
+                combined_df.fillna(0, inplace=True)
+                
         return combined_df
+        
     except Exception as e:
         logging.error(f"Error combining datasets: {e}")
         import traceback
         logging.error(traceback.format_exc())
         return None
 
-def save_combined_data(df):
-    """Save combined dataset to file"""
+def save_combined_data(df, interval="daily"):
+    """
+    Save the combined dataset to CSV
+    
+    Args:
+        df: Combined dataframe
+        interval: for nu kun "daily" understøttet
+    """
     try:
-        output_path = INTERMEDIATE_DIR / OUTPUT_FILENAME
-        df.to_csv(output_path, index=False)
-        logging.info(f"Combined trading days data saved successfully to {output_path}")
+        if df is None:
+            logging.error(f"Cannot save {interval} combined data: DataFrame is None")
+            return False
+            
+        if interval == "daily":
+            output_file = INTERMEDIATE_DIR / OUTPUT_DAILY_FILENAME
+        else:
+            logging.error(f"Unsupported interval: {interval}. Only 'daily' is supported.")
+            return False
+            
+        # Gem med dato som indeks
+        df.to_csv(output_file)
+        logging.info(f"Combined {interval} data saved successfully to {output_file}")
         return True
     except Exception as e:
-        logging.error(f"Error saving combined data: {e}")
+        logging.error(f"Error saving combined {interval} data: {e}")
+        return False
+
+def process_interval_data(interval="daily"):
+    """
+    Process data for a specific interval
+    
+    Args:
+        interval: for nu kun "daily" understøttet
+    """
+    try:
+        logging.info(f"Processing {interval} data")
+        
+        # Load Vestas data
+        vestas_df = load_vestas_data(interval)
+        if vestas_df is None:
+            logging.error(f"Failed to load Vestas {interval} data")
+            return False
+            
+        # Load macroeconomic data
+        macro_df = load_macro_data(interval)
+        if macro_df is None:
+            logging.warning(f"No macro {interval} data available, proceeding with Vestas data only")
+            
+        # Combine datasets
+        combined_df = combine_datasets(vestas_df, macro_df, interval)
+        if combined_df is None:
+            logging.error(f"Failed to combine {interval} datasets")
+            return False
+            
+        # Save combined data
+        if not save_combined_data(combined_df, interval):
+            logging.error(f"Failed to save combined {interval} data")
+            return False
+            
+        logging.info(f"Processing {interval} data completed successfully")
+        return True
+        
+    except Exception as e:
+        logging.error(f"Error in process_interval_data for {interval}: {e}")
         return False
 
 def main():
-    """Main function to run the data combination process"""
-    logging.info("--- Starting Data Combination Process (Trading Days Only) ---")
+    """Main function to run the data combination process."""
+    logging.info("--- Starting Data Combination Process ---")
     
-    # Load Bitcoin data
-    bitcoin_df = load_bitcoin_data()
-    if bitcoin_df is None:
-        logging.error("Halting process due to Bitcoin data load error")
-        sys.exit(1)
-    
-    # Load macroeconomic data
-    macro_df = load_macro_data()
-    if macro_df is None:
-        logging.error("Halting process due to macroeconomic data load error")
-        sys.exit(1)
-    
-    # Combine datasets
-    combined_df = combine_datasets(bitcoin_df, macro_df)
-    if combined_df is None:
-        logging.error("Halting process due to data combination error")
-        sys.exit(1)
-    
-    # Save combined data
-    if save_combined_data(combined_df):
-        logging.info("--- Data Combination (Trading Days Only) Completed Successfully ---")
+    # Process daily data
+    if process_interval_data("daily"):
+        logging.info("--- Daily Data Combination Completed Successfully ---")
     else:
-        logging.error("--- Data Combination Failed (Save Error) ---")
+        logging.error("--- Daily Data Combination Failed ---")
         sys.exit(1)
+    
+    logging.info("--- Data Combination Process Complete ---")
 
 if __name__ == "__main__":
     main() 
