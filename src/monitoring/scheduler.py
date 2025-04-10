@@ -1,128 +1,120 @@
+import schedule
+import time
 import logging
 from pathlib import Path
+import json
 from datetime import datetime
-from apscheduler.schedulers.background import BackgroundScheduler
-from .drift_detector import DriftDetector
-from .evaluation import ModelEvaluator
-from .prediction_store import PredictionStore
 import sys
-import time
+sys.path.append(str(Path(__file__).resolve().parents[1]))
+from pipeline.training import train_model, load_data, prepare_data, select_features
+from monitoring.evaluation import ModelEvaluator
 
 # Konfigurer logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('pipeline.log'),
+        logging.StreamHandler()
+    ]
+)
 logger = logging.getLogger(__name__)
 
 class ModelUpdateScheduler:
     def __init__(self):
-        self.scheduler = BackgroundScheduler()
-        self.drift_detector = DriftDetector()
-        self.model_evaluator = ModelEvaluator()
-        self.prediction_store = PredictionStore()
-        self.project_root = Path(__file__).resolve().parents[2]
         self.is_running = False
+        self.metrics_file = Path("src/monitoring/model_metrics.json")
+        self.metrics_file.parent.mkdir(parents=True, exist_ok=True)
         
-    def start(self):
-        """Start scheduler med daglige jobs"""
+        # Initialiser metrics fil hvis den ikke eksisterer
+        if not self.metrics_file.exists():
+            self._initialize_metrics_file()
+    
+    def _initialize_metrics_file(self):
+        """Initialiserer metrics filen med tom struktur"""
+        initial_metrics = {
+            "accuracy_history": [],
+            "last_update": None,
+            "model_versions": []
+        }
+        with open(self.metrics_file, 'w') as f:
+            json.dump(initial_metrics, f, indent=4)
+    
+    def update_model_metrics(self, accuracy):
+        """Opdaterer metrics filen med nye metrics"""
         try:
-            if self.is_running:
-                logger.warning("Scheduler er allerede kørende")
-                return
-                
-            # Planlæg drift detection hver dag kl. 01:00
-            self.scheduler.add_job(
-                self.check_and_update_model,
-                'cron',
-                hour=1,
-                minute=0,
-                id='daily_model_check'
+            with open(self.metrics_file, 'r') as f:
+                metrics = json.load(f)
+            
+            # Tilføj nye metrics
+            metrics["accuracy_history"].append({
+                "date": datetime.now().strftime("%Y-%m-%d"),
+                "accuracy": accuracy
+            })
+            metrics["last_update"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            metrics["model_versions"].append({
+                "version": len(metrics["model_versions"]) + 1,
+                "date": datetime.now().strftime("%Y-%m-%d"),
+                "accuracy": accuracy
+            })
+            
+            # Gem opdaterede metrics
+            with open(self.metrics_file, 'w') as f:
+                json.dump(metrics, f, indent=4)
+            
+            logger.info(f"Metrics opdateret med ny accuracy: {accuracy:.4f}")
+            
+        except Exception as e:
+            logger.error(f"Fejl ved opdatering af metrics: {e}")
+    
+    def update_model(self):
+        """Opdaterer modellen med ny data og evaluerer performance"""
+        try:
+            logger.info("Starter daglig model opdatering...")
+            
+            # Load og forbered data
+            df = load_data()
+            if df is None:
+                raise ValueError("Kunne ikke indlæse data")
+            
+            X, y_dict, feature_columns, target_columns, scaler = prepare_data(df)
+            X_selected, selected_features = select_features(X, y_dict, feature_columns)
+            
+            # Træn ny model
+            models, metrics, feature_importances = train_model(
+                X_selected, y_dict, selected_features, target_columns
             )
             
-            # Start scheduler
-            self.scheduler.start()
-            self.is_running = True
-            logger.info("Model update scheduler started successfully")
+            # Opdater metrics
+            accuracy = metrics['accuracy']
+            self.update_model_metrics(accuracy)
+            
+            logger.info(f"Model opdateret succesfuldt. Ny accuracy: {accuracy:.4f}")
             
         except Exception as e:
-            logger.error(f"Error starting scheduler: {e}")
-            raise
-            
-    def check_and_update_model(self):
-        """Tjek for drift og opdater model hvis nødvendigt"""
-        try:
-            logger.info("Starting daily model check...")
-            
-            # Tjek for drift
-            drift_results = self.drift_detector.detect_drift()
-            
-            if self.drift_detector.should_retrain(drift_results):
-                logger.info("Drift detected - initiating model retraining")
-                self.retrain_model()
-            else:
-                logger.info("No significant drift detected - model remains unchanged")
-                
-            # Evaluer model performance
-            self.evaluate_model_performance()
-            
-        except Exception as e:
-            logger.error(f"Error in model check: {e}")
-            
-    def retrain_model(self):
-        """Retrain model med ny data"""
-        try:
-            # Import træningsmoduler her for at undgå cirkulære imports
-            sys.path.append(str(self.project_root))
-            from src.pipeline.training import main as train_model
-            
-            # Kør model træning
-            logger.info("Starting model retraining...")
-            train_model()
-            logger.info("Model retraining completed successfully")
-            
-            # Vent kort tid for at sikre at alle filer er gemt
-            time.sleep(2)
-            
-            # Evaluer den nye model med det samme
-            self.evaluate_model_performance()
-            
-        except Exception as e:
-            logger.error(f"Error during model retraining: {e}")
-            
-    def evaluate_model_performance(self):
-        """Evaluer model performance og gem metrics"""
-        try:
-            # Hent seneste prædiktioner
-            recent_predictions = self.prediction_store.get_recent_predictions(days=7)
-            
-            if not recent_predictions.empty:
-                # Evaluer prædiktioner
-                metrics = self.model_evaluator.evaluate_predictions(
-                    predictions=recent_predictions['prediction'].tolist(),
-                    actual_values=recent_predictions['actual_value'].tolist(),
-                    timestamp=datetime.now().isoformat()
-                )
-                
-                # Hent prediction metrics
-                prediction_metrics = self.prediction_store.get_prediction_metrics()
-                
-                # Kombinér metrics
-                combined_metrics = {
-                    **metrics,
-                    'prediction_metrics': prediction_metrics
-                }
-                
-                logger.info(f"Model evaluation completed. Metrics: {combined_metrics}")
-            else:
-                logger.warning("No recent predictions available for evaluation")
-                
-        except Exception as e:
-            logger.error(f"Error during model evaluation: {e}")
-            
+            logger.error(f"Fejl under model opdatering: {e}")
+    
+    def start(self):
+        """Starter scheduler"""
+        if self.is_running:
+            logger.warning("Scheduler kører allerede")
+            return
+        
+        self.is_running = True
+        logger.info("Starter model update scheduler...")
+        
+        # Planlæg daglig opdatering kl. 01:00
+        schedule.every().day.at("01:00").do(self.update_model)
+        
+        # Kør første opdatering med det samme
+        self.update_model()
+        
+        # Hold scheduler kørende
+        while self.is_running:
+            schedule.run_pending()
+            time.sleep(60)
+    
     def stop(self):
-        """Stop scheduler og cleanup"""
-        try:
-            if self.is_running:
-                self.scheduler.shutdown()
-                self.is_running = False
-                logger.info("Model update scheduler stopped successfully")
-        except Exception as e:
-            logger.error(f"Error stopping scheduler: {e}") 
+        """Stopper scheduler"""
+        self.is_running = False
+        logger.info("Stopper model update scheduler...") 

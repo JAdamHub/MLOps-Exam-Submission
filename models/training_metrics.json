@@ -89,5 +89,19 @@
             "dxy_eurusd_corr_30d": 0.10392222590744496,
             "gold_dxy_corr_30d": 0.030523360660299658
         }
-    }
+    },
+    "accuracy_history": [
+        {
+            "date": "2024-03-20",
+            "accuracy": 0.7523
+        }
+    ],
+    "last_update": "2024-03-20 01:00:00",
+    "model_versions": [
+        {
+            "version": 1,
+            "date": "2024-03-20",
+            "accuracy": 0.7523
+        }
+    ]
 }
