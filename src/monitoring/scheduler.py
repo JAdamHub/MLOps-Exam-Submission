@@ -1,18 +1,26 @@
 import schedule
 import time
 import logging
-from pathlib import Path
 import json
+import os
 from datetime import datetime
+import numpy as np
+from pathlib import Path
 import sys
-sys.path.append(str(Path(__file__).resolve().parents[1]))
-from pipeline.training import train_model, load_data, prepare_data, select_features
-from monitoring.evaluation import ModelEvaluator
 
-# Konfigurer logging
+# Add src to path
+sys.path.append(str(Path(__file__).parent.parent))
+
+from models.lstm_model import LSTMModel
+from data.data_processor import DataProcessor
+from pipeline.stock_data_collector import collect_stock_data
+from pipeline.preprocessing import preprocess_data, save_processed_data
+from pipeline.combined_data_processor import process_interval_data
+
+# Setup logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         logging.FileHandler('pipeline.log'),
         logging.StreamHandler()
@@ -20,101 +28,123 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-class ModelUpdateScheduler:
+class ModelScheduler:
     def __init__(self):
-        self.is_running = False
-        self.metrics_file = Path("src/monitoring/model_metrics.json")
-        self.metrics_file.parent.mkdir(parents=True, exist_ok=True)
+        self.running = False
+        self.metrics_file = 'model_metrics.json'
+        self.load_metrics()
         
-        # Initialiser metrics fil hvis den ikke eksisterer
-        if not self.metrics_file.exists():
-            self._initialize_metrics_file()
-    
-    def _initialize_metrics_file(self):
-        """Initialiserer metrics filen med tom struktur"""
-        initial_metrics = {
-            "accuracy_history": [],
-            "last_update": None,
-            "model_versions": []
-        }
-        with open(self.metrics_file, 'w') as f:
-            json.dump(initial_metrics, f, indent=4)
-    
-    def update_model_metrics(self, accuracy):
-        """Opdaterer metrics filen med nye metrics"""
-        try:
+    def load_metrics(self):
+        """Load existing metrics or create new metrics file"""
+        if os.path.exists(self.metrics_file):
             with open(self.metrics_file, 'r') as f:
-                metrics = json.load(f)
+                self.metrics = json.load(f)
+        else:
+            self.metrics = {
+                'lstm': {
+                    'accuracy_history': [],
+                    'versions': [],
+                    'last_update': None
+                }
+            }
+            self.save_metrics()
+    
+    def save_metrics(self):
+        """Save metrics to file"""
+        with open(self.metrics_file, 'w') as f:
+            json.dump(self.metrics, f, indent=4)
+    
+    def collect_new_data(self):
+        """Collect new data from APIs"""
+        try:
+            logger.info("Starting daily data collection")
             
-            # Tilføj nye metrics
-            metrics["accuracy_history"].append({
-                "date": datetime.now().strftime("%Y-%m-%d"),
-                "accuracy": accuracy
-            })
-            metrics["last_update"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            metrics["model_versions"].append({
-                "version": len(metrics["model_versions"]) + 1,
-                "date": datetime.now().strftime("%Y-%m-%d"),
-                "accuracy": accuracy
-            })
+            # Collect new stock data
+            stock_data = collect_stock_data()
+            if stock_data is None:
+                raise ValueError("Failed to collect new stock data")
             
-            # Gem opdaterede metrics
-            with open(self.metrics_file, 'w') as f:
-                json.dump(metrics, f, indent=4)
+            # Process the new data
+            if not process_interval_data(interval="daily"):
+                raise ValueError("Failed to process new data")
             
-            logger.info(f"Metrics opdateret med ny accuracy: {accuracy:.4f}")
+            logger.info("New data collected and processed successfully")
+            return True
             
         except Exception as e:
-            logger.error(f"Fejl ved opdatering af metrics: {e}")
+            logger.error(f"Error collecting new data: {str(e)}", exc_info=True)
+            return False
     
-    def update_model(self):
-        """Opdaterer modellen med ny data og evaluerer performance"""
+    def update_lstm_model(self):
+        """Update LSTM model with new data"""
         try:
-            logger.info("Starter daglig model opdatering...")
+            logger.info("Starting LSTM model update")
             
-            # Load og forbered data
-            df = load_data()
-            if df is None:
-                raise ValueError("Kunne ikke indlæse data")
+            # First collect new data
+            if not self.collect_new_data():
+                raise ValueError("Failed to collect new data")
             
-            X, y_dict, feature_columns, target_columns, scaler = prepare_data(df)
-            X_selected, selected_features = select_features(X, y_dict, feature_columns)
+            # Initialize data processor and load data
+            data_processor = DataProcessor()
+            data_processor.load_data()
             
-            # Træn ny model
-            models, metrics, feature_importances = train_model(
-                X_selected, y_dict, selected_features, target_columns
+            # Prepare sequential data
+            sequence_length = 10
+            X_train, y_train, X_test, y_test = data_processor.prepare_sequential_data(
+                sequence_length=sequence_length
             )
             
-            # Opdater metrics
-            accuracy = metrics['accuracy']
-            self.update_model_metrics(accuracy)
+            # Initialize and train LSTM model
+            lstm_model = LSTMModel()
+            lstm_model.train(X_train, y_train, X_test, y_test)
             
-            logger.info(f"Model opdateret succesfuldt. Ny accuracy: {accuracy:.4f}")
+            # Evaluate model
+            test_predictions = lstm_model.predict(X_test)
+            test_accuracy = np.mean(np.argmax(test_predictions, axis=1) == np.argmax(y_test, axis=1))
+            
+            # Update metrics
+            self.metrics['lstm']['accuracy_history'].append(float(test_accuracy))
+            self.metrics['lstm']['versions'].append({
+                'version': len(self.metrics['lstm']['versions']) + 1,
+                'accuracy': float(test_accuracy),
+                'timestamp': datetime.now().isoformat()
+            })
+            self.metrics['lstm']['last_update'] = datetime.now().isoformat()
+            
+            # Save updated metrics
+            self.save_metrics()
+            
+            logger.info(f"LSTM model updated successfully. New accuracy: {test_accuracy:.4f}")
             
         except Exception as e:
-            logger.error(f"Fejl under model opdatering: {e}")
+            logger.error(f"Error updating LSTM model: {str(e)}", exc_info=True)
+    
+    def run_scheduler(self):
+        """Run the scheduler"""
+        self.running = True
+        logger.info("Starting scheduler")
+        
+        while self.running:
+            schedule.run_pending()
+            time.sleep(60)  # Check every minute
     
     def start(self):
-        """Starter scheduler"""
-        if self.is_running:
-            logger.warning("Scheduler kører allerede")
-            return
+        """Start the scheduler"""
+        # Schedule daily model updates
+        schedule.every().day.at("01:00").do(self.update_lstm_model)
         
-        self.is_running = True
-        logger.info("Starter model update scheduler...")
+        # Run the scheduler in a separate thread
+        import threading
+        scheduler_thread = threading.Thread(target=self.run_scheduler)
+        scheduler_thread.start()
         
-        # Planlæg daglig opdatering kl. 01:00
-        schedule.every().day.at("01:00").do(self.update_model)
-        
-        # Kør første opdatering med det samme
-        self.update_model()
-        
-        # Hold scheduler kørende
-        while self.is_running:
-            schedule.run_pending()
-            time.sleep(60)
+        logger.info("Scheduler started")
     
     def stop(self):
-        """Stopper scheduler"""
-        self.is_running = False
-        logger.info("Stopper model update scheduler...") 
+        """Stop the scheduler"""
+        self.running = False
+        logger.info("Scheduler stopped")
+
+if __name__ == "__main__":
+    scheduler = ModelScheduler()
+    scheduler.start() 

@@ -1,105 +1,105 @@
 import json
 import matplotlib.pyplot as plt
 import seaborn as sns
-from pathlib import Path
-import pandas as pd
 from datetime import datetime
+import pandas as pd
+import logging
 
-def load_metrics():
-    """Indlæser metrics fra JSON filen"""
-    metrics_file = Path("src/monitoring/model_metrics.json")
-    if not metrics_file.exists():
-        raise FileNotFoundError("Metrics fil ikke fundet")
-    
-    with open(metrics_file, 'r') as f:
-        return json.load(f)
+# Setup logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('pipeline.log'),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
 
-def create_accuracy_plot():
-    """Opretter plot af accuracy over tid"""
-    metrics = load_metrics()
+class ModelMetricsVisualizer:
+    def __init__(self, metrics_file='model_metrics.json'):
+        self.metrics_file = metrics_file
+        self.metrics = self.load_metrics()
+        
+    def load_metrics(self):
+        """Load metrics from file"""
+        try:
+            with open(self.metrics_file, 'r') as f:
+                return json.load(f)
+        except FileNotFoundError:
+            logger.error(f"Metrics file {self.metrics_file} not found")
+            return None
+        except json.JSONDecodeError:
+            logger.error(f"Error decoding metrics file {self.metrics_file}")
+            return None
     
-    # Konverter accuracy historik til DataFrame
-    df = pd.DataFrame(metrics['accuracy_history'])
-    df['date'] = pd.to_datetime(df['date'])
+    def plot_accuracy_history(self, save_path=None):
+        """Plot accuracy history for LSTM model"""
+        if not self.metrics or 'lstm' not in self.metrics:
+            logger.error("No LSTM metrics available")
+            return
+        
+        plt.figure(figsize=(12, 6))
+        accuracy_history = self.metrics['lstm']['accuracy_history']
+        
+        plt.plot(accuracy_history, marker='o', linestyle='-', color='blue')
+        plt.title('LSTM Model Accuracy History')
+        plt.xlabel('Update Number')
+        plt.ylabel('Accuracy')
+        plt.grid(True)
+        
+        if save_path:
+            plt.savefig(save_path)
+            logger.info(f"Accuracy history plot saved to {save_path}")
+        else:
+            plt.show()
+        plt.close()
     
-    # Opret plot
-    plt.figure(figsize=(12, 6))
-    sns.set_style("whitegrid")
+    def plot_version_comparison(self, save_path=None):
+        """Plot version comparison for LSTM model"""
+        if not self.metrics or 'lstm' not in self.metrics:
+            logger.error("No LSTM metrics available")
+            return
+        
+        versions = self.metrics['lstm']['versions']
+        if not versions:
+            logger.error("No version data available")
+            return
+        
+        df = pd.DataFrame(versions)
+        df['timestamp'] = pd.to_datetime(df['timestamp'])
+        
+        plt.figure(figsize=(12, 6))
+        sns.barplot(data=df, x='version', y='accuracy', color='blue')
+        plt.title('LSTM Model Version Comparison')
+        plt.xlabel('Model Version')
+        plt.ylabel('Accuracy')
+        plt.grid(True)
+        
+        if save_path:
+            plt.savefig(save_path)
+            logger.info(f"Version comparison plot saved to {save_path}")
+        else:
+            plt.show()
+        plt.close()
     
-    # Plot accuracy linje
-    sns.lineplot(data=df, x='date', y='accuracy', marker='o')
-    
-    # Tilføj labels og titel
-    plt.title('Model Accuracy Over Tid', fontsize=14, pad=20)
-    plt.xlabel('Dato', fontsize=12)
-    plt.ylabel('Accuracy', fontsize=12)
-    
-    # Roter x-aksis labels for bedre læsbarhed
-    plt.xticks(rotation=45)
-    
-    # Tilføj grid
-    plt.grid(True, linestyle='--', alpha=0.7)
-    
-    # Tilføj sidste accuracy værdi som tekst
-    last_accuracy = df['accuracy'].iloc[-1]
-    plt.annotate(f'Sidste accuracy: {last_accuracy:.4f}',
-                xy=(df['date'].iloc[-1], last_accuracy),
-                xytext=(10, 10), textcoords='offset points',
-                bbox=dict(facecolor='white', edgecolor='gray', alpha=0.8))
-    
-    # Tilpas layout
-    plt.tight_layout()
-    
-    # Gem plot
-    output_dir = Path("src/monitoring/figures")
-    output_dir.mkdir(parents=True, exist_ok=True)
-    plt.savefig(output_dir / 'accuracy_over_time.png')
-    plt.close()
-
-def create_version_comparison_plot():
-    """Opretter plot der sammenligner model versioner"""
-    metrics = load_metrics()
-    
-    # Konverter version data til DataFrame
-    df = pd.DataFrame(metrics['model_versions'])
-    df['date'] = pd.to_datetime(df['date'])
-    
-    # Opret plot
-    plt.figure(figsize=(12, 6))
-    sns.set_style("whitegrid")
-    
-    # Plot version accuracy
-    sns.barplot(data=df, x='version', y='accuracy')
-    
-    # Tilføj labels og titel
-    plt.title('Model Version Accuracy Sammenligning', fontsize=14, pad=20)
-    plt.xlabel('Model Version', fontsize=12)
-    plt.ylabel('Accuracy', fontsize=12)
-    
-    # Tilføj accuracy værdier over bars
-    for i, v in enumerate(df['accuracy']):
-        plt.text(i, v, f'{v:.4f}', ha='center', va='bottom')
-    
-    # Tilføj grid
-    plt.grid(True, linestyle='--', alpha=0.7)
-    
-    # Tilpas layout
-    plt.tight_layout()
-    
-    # Gem plot
-    output_dir = Path("src/monitoring/figures")
-    output_dir.mkdir(parents=True, exist_ok=True)
-    plt.savefig(output_dir / 'version_comparison.png')
-    plt.close()
-
-def main():
-    """Hovedfunktion til at generere alle visualiseringer"""
-    try:
-        create_accuracy_plot()
-        create_version_comparison_plot()
-        print("Visualiseringer genereret succesfuldt i 'src/monitoring/figures/'")
-    except Exception as e:
-        print(f"Fejl under generering af visualiseringer: {e}")
+    def generate_report(self, save_dir='reports'):
+        """Generate comprehensive visualization report"""
+        try:
+            import os
+            os.makedirs(save_dir, exist_ok=True)
+            
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            
+            # Generate plots
+            self.plot_accuracy_history(f"{save_dir}/lstm_accuracy_history_{timestamp}.png")
+            self.plot_version_comparison(f"{save_dir}/lstm_version_comparison_{timestamp}.png")
+            
+            logger.info(f"Report generated successfully in {save_dir}")
+            
+        except Exception as e:
+            logger.error(f"Error generating report: {str(e)}", exc_info=True)
 
 if __name__ == "__main__":
-    main() 
+    visualizer = ModelMetricsVisualizer()
+    visualizer.generate_report() 
