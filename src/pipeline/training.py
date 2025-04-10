@@ -524,7 +524,7 @@ def train_model(X, y_dict, feature_names, target_columns, best_params=None):
                 
                 fold += 1
                 
-            except Exception as e:
+    except Exception as e:
                 logging.error(f"Error in fold {fold}: {e}")
                 import traceback
                 logging.error(traceback.format_exc())
@@ -603,7 +603,7 @@ def train_model(X, y_dict, feature_names, target_columns, best_params=None):
             avg_r2 = np.mean(cv_scores['r2'])
             logging.info(f"Average metrics for {target_col} - RMSE: {avg_rmse:.4f}, MAE: {avg_mae:.4f}, R²: {avg_r2:.4f}")
             
-        except Exception as e:
+    except Exception as e:
             logging.error(f"Error training final model: {e}")
             import traceback
             logging.error(traceback.format_exc())
@@ -662,7 +662,7 @@ def main():
     """
     start_time = time.time()
     logging.info("==== Starting regression model training process ====")
-    
+
     # Load data
     df = load_data()
     if df is None:

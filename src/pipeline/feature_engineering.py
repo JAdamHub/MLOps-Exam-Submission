@@ -269,7 +269,7 @@ def create_features(df: pd.DataFrame) -> pd.DataFrame | None:
         logging.info(f"Feature engineering completed. Total features created: {len(features_df.columns)}")
         
         return features_df
-    
+
     except Exception as e:
         logging.error(f"Error during feature engineering: {e}")
         import traceback
@@ -612,7 +612,7 @@ def main():
         
         # Generer basis-features
         features_df = create_features(df)
-        if features_df is None:
+    if features_df is None:
             return
         
         # Generer market features
@@ -624,8 +624,8 @@ def main():
         features_df = calculate_macro_features(features_df)
         
         # Gem det endelige datasæt med alle features
-        save_features(features_df, OUTPUT_FILE_PATH)
-        
+    save_features(features_df, OUTPUT_FILE_PATH)
+
         # Gem også en simplere version med kun de mest relevante features (for reference)
         latest_data = features_df.tail(100).copy()
         # Sikre at vi kun beholder numeriske kolonner
