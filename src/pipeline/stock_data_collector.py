@@ -27,9 +27,6 @@ load_dotenv(PROJECT_ROOT / ".env")
 ALPHA_VANTAGE_API_KEY = os.getenv("ALPHA_VANTAGE_API_KEY")
 if not ALPHA_VANTAGE_API_KEY:
     raise ValueError("ALPHA_VANTAGE_API_KEY not found in environment variables")
-
-ALPHA_VANTAGE_API_KEY = "SYGSH2G00TZCQ5NS"
-
 # Alpha Vantage API configuration
 API_BASE_URL = "https://www.alphavantage.co/query"
 

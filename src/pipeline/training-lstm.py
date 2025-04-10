@@ -1182,8 +1182,38 @@ def main():
         
         logging.info("Seq2Seq model træning og evaluering gennemført")
         
-        # Original LSTM model (hvis du stadig vil køre denne)
-        # ... existing code ...
+        # Gem model og hjælpefiler til API
+        logging.info("Gemmer model og hjælpefiler til API...")
+        
+        # Opret models-mappe hvis den ikke findes
+        models_dir = Path('models')
+        models_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Gem model
+        model.save(models_dir / 'lstm_multi_horizon_model.keras')
+        logging.info("Model gemt som 'lstm_multi_horizon_model.keras'")
+        
+        # Gem feature scaler
+        joblib.dump(feature_scaler, models_dir / 'lstm_feature_scaler.joblib')
+        logging.info("Feature scaler gemt som 'lstm_feature_scaler.joblib'")
+        
+        # Gem target scalers
+        joblib.dump(target_scalers, models_dir / 'lstm_target_scalers.joblib')
+        logging.info("Target scalers gemt som 'lstm_target_scalers.joblib'")
+        
+        # Gem feature kolonner
+        joblib.dump(feature_columns, models_dir / 'lstm_feature_names.joblib')
+        logging.info("Feature kolonner gemt som 'lstm_feature_names.joblib'")
+        
+        # Gem sequence length
+        joblib.dump(seq_length, models_dir / 'lstm_sequence_length.joblib')
+        logging.info("Sequence length gemt som 'lstm_sequence_length.joblib'")
+        
+        # Gem target kolonner
+        joblib.dump(target_columns, models_dir / 'lstm_target_columns.joblib')
+        logging.info("Target kolonner gemt som 'lstm_target_columns.joblib'")
+        
+        logging.info("Alle nødvendige filer til API gemt i models-mappen")
         
         return True
         
