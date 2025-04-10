@@ -4,7 +4,6 @@ import importlib
 import os
 from pathlib import Path
 from dotenv import load_dotenv
-import argparse
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -42,14 +41,8 @@ def main():
     2. Combine datasets (kun handelsdage - danske børs åbningsdage)
     3. Preprocess combined data
     4. Feature engineering
-    5. Train machine learning model (LSTM eller XGBoost)
-    """
-    # Parse command line arguments
-    parser = argparse.ArgumentParser(description='Run the ML pipeline')
-    parser.add_argument('--model', choices=['xgboost', 'lstm'], default='lstm',
-                      help='Choose which model to train (default: lstm)')
-    args = parser.parse_args()
-    
+    5. Train LSTM model
+    """    
     # Tilføj sys.path til at inkludere projektets rod
     project_root = Path(__file__).resolve().parents[2]
     sys.path.insert(0, str(project_root))
@@ -87,19 +80,15 @@ def main():
         logging.error("Halting pipeline due to error in feature engineering")
         sys.exit(1)
     
-    # Model Training - vælg mellem LSTM eller XGBoost
-    if args.model == 'lstm':
-        logging.info("Training LSTM model...")
-        training_module = "src.pipeline.training-lstm"
-    else:
-        logging.info("Training XGBoost model...")
-        training_module = "src.pipeline.training"
+    # Model Training - kun LSTM
+    logging.info("Training LSTM model...")
+    training_module = "src.pipeline.training-lstm"
     
     if not run_module(training_module, skip_errors=False):
-        logging.error(f"Halting pipeline due to error in {args.model} model training")
+        logging.error("Halting pipeline due to error in LSTM model training")
         sys.exit(1)
     
-    logging.info(f"=== ML Pipeline Completed Successfully with {args.model.upper()} model ===")
+    logging.info("=== ML Pipeline Completed Successfully with LSTM model ===")
 
 if __name__ == "__main__":
     main() 

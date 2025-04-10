@@ -28,13 +28,15 @@ ALPHA_VANTAGE_API_KEY = os.getenv("ALPHA_VANTAGE_API_KEY")
 if not ALPHA_VANTAGE_API_KEY:
     raise ValueError("ALPHA_VANTAGE_API_KEY not found in environment variables")
 
+ALPHA_VANTAGE_API_KEY = "SYGSH2G00TZCQ5NS"
+
 # Alpha Vantage API configuration
 API_BASE_URL = "https://www.alphavantage.co/query"
 
 # Vestas stock configuration - Opdateret symbol til VWS.CPH
-STOCK_SYMBOL = "VWSYF"  # Vestas Wind Systems ticker på US markeder (OTC)
+STOCK_SYMBOL = "VWSB.DEX"  # Vestas Wind Systems ticker på Frankfurts fondsbørs
 # Alternative symboler at prøve hvis hovedsymbol fejler
-STOCK_SYMBOL_ALTERNATIVES = ["VWSB.DEX", "VWS.CPH", "VWS.CO", "VWDRY"]
+STOCK_SYMBOL_ALTERNATIVES = ["VWSYF", "VWSB.DEX", "VWS.CO", "VWDRY"]
 
 OUTPUT_SIZE = "full"  # For at få så mange historiske data som muligt (op til 20 år)
 
@@ -137,6 +139,14 @@ def fetch_data(params, retries=MAX_RETRIES, delay=RETRY_DELAY):
             # Try to parse JSON - with some APIs, invalid responses might be JSON formatted
             try:
                 data = response.json()
+                # Print the full response for debugging
+                logging.info(f"Response from Alpha Vantage for {symbol}: {data.keys()}")
+                if 'Information' in data:
+                    logging.info(f"Information message: {data['Information']}")
+                if 'Error Message' in data:
+                    logging.info(f"Error message: {data['Error Message']}")
+                if 'Note' in data:
+                    logging.info(f"Note message: {data['Note']}")
             except json.JSONDecodeError:
                 logging.error(f"Invalid JSON response: {response.text[:200]}...")
                 if attempt < retries - 1:
