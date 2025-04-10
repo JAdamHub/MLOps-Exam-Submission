@@ -39,7 +39,7 @@ FIGURES_DIR.mkdir(parents=True, exist_ok=True)
 def load_data():
     """Load feature data for training."""
     try:
-        input_file = PROCESSED_FEATURES_DIR / "bitcoin_features_trading_days.csv"
+        input_file = PROCESSED_FEATURES_DIR / "vestas_features_trading_days.csv"
         df = pd.read_csv(input_file)
         logging.info(f"Feature data loaded successfully from {input_file}, shape: {df.shape}")
         return df
@@ -52,8 +52,20 @@ def prepare_data(df):
     # Remove timestamp and ID columns
     df = df.copy()
     
+    # Tjek om indekset indeholder datoer og sørg for at den ikke bliver en feature
+    if isinstance(df.index, pd.DatetimeIndex) or df.index.name == 'date':
+        logging.info("DataFrame har DatetimeIndex - gemmer indeks separat fra features")
+        # Konverter indeks til en separat kolonne, hvis det er nødvendigt
+        if not isinstance(df.index, pd.DatetimeIndex):
+            df.index = pd.to_datetime(df.index)
+        # Behold indekset
+    elif 'date' in df.columns:
+        logging.info("Konverterer 'date' kolonne til indeks")
+        df['date'] = pd.to_datetime(df['date'])
+        df.set_index('date', inplace=True)
+    
     # Drop timestamp columns since they can't be converted to floats
-    timestamp_cols = [col for col in df.columns if 'timestamp' in col.lower() or 'unnamed' in col.lower()]
+    timestamp_cols = [col for col in df.columns if 'timestamp' in col.lower() or 'unnamed' in col.lower() or 'date' == col.lower()]
     df = df.drop(columns=timestamp_cols, errors='ignore')
     
     # Handle infinity and NaN values
@@ -286,9 +298,9 @@ def evaluate_model(model, X_test_seq, y_test, target_scaler, horizon):
     plt.figure(figsize=(12, 6))
     plt.plot(y_test_denorm, label='Actual')
     plt.plot(y_pred_denorm, label='Predicted')
-    plt.title(f'LSTM Predictions vs Actuals - {horizon}-day Horizon')
+    plt.title(f'LSTM Predictions vs Actuals - {horizon}-day Horizon (Vestas)')
     plt.xlabel('Time')
-    plt.ylabel('Bitcoin Price')
+    plt.ylabel('Vestas Stock Price')
     plt.legend()
     plt.grid(True)
     
@@ -449,7 +461,7 @@ def save_model(models, feature_scaler, target_scalers, metrics, histories, test_
             plt.figure(figsize=(10, 6))
             plt.plot(histories[target_col]['loss'], label='Training Loss')
             plt.plot(histories[target_col]['val_loss'], label='Validation Loss')
-            plt.title(f'LSTM Training History - {horizon}-day Horizon')
+            plt.title(f'LSTM Training History - {horizon}-day Horizon (Vestas)')
             plt.xlabel('Epoch')
             plt.ylabel('Loss (MSE)')
             plt.legend()
@@ -477,7 +489,7 @@ def main():
     Main function to orchestrate the training process for LSTM models
     """
     start_time = time.time()
-    logging.info("==== Starting LSTM model training process ====")
+    logging.info("==== Starting LSTM model training process for Vestas stock price prediction ====")
     
     # Tjek om TensorFlow GPU er tilgængeligt
     gpu_available = len(tf.config.list_physical_devices('GPU')) > 0
