@@ -6,14 +6,16 @@ from pathlib import Path
 import json
 import time
 import tensorflow as tf
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import LSTM, Dense, Dropout, Bidirectional
+from tensorflow.keras.models import Sequential, Model
+from tensorflow.keras.layers import LSTM, Dense, Dropout, Bidirectional, Input
 from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau, ModelCheckpoint
 from tensorflow.keras.optimizers import Adam
 from sklearn.model_selection import TimeSeriesSplit
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
 import matplotlib.pyplot as plt
+from datetime import datetime
+import traceback
 
 # Konfigurer logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -143,40 +145,57 @@ def prepare_data(df):
     
     return data_splits, feature_columns, target_columns, feature_scaler, target_scalers
 
-def create_sequences(X, y, seq_length=SEQUENCE_LENGTH):
-    """Create sequences for LSTM input."""
-    X_seq, y_seq = [], []
-    for i in range(len(X) - seq_length):
-        X_seq.append(X[i:i+seq_length])
-        y_seq.append(y[i+seq_length])
-    return np.array(X_seq), np.array(y_seq)
-
-def build_lstm_model(input_shape, lstm_units=250, dropout_rate=0.3):
-    """Build a deeper LSTM model architecture."""
-    model = Sequential([
-        # First LSTM layer with return sequences for stacking
-        Bidirectional(LSTM(units=lstm_units, return_sequences=True), input_shape=input_shape),
-        Dropout(dropout_rate),
-        
-        # Second LSTM layer
-        Bidirectional(LSTM(units=lstm_units//2, return_sequences=False)),
-        Dropout(dropout_rate),
-        
-        # Dense layers for better representation
-        Dense(units=64, activation='relu'),
-        Dropout(dropout_rate/2),
-        
-        # Output layer
-        Dense(units=1)
-    ])
+def create_sequences(X, y_dict, seq_length):
+    """
+    Opret sekvenser af data for LSTM træning.
+    X er input features, y_dict er et dictionary med targets for hver horisont.
+    """
+    X_seq, y_seq_dict = [], {k: [] for k in y_dict.keys()}
     
+    for i in range(len(X) - seq_length):
+        # Input sequence
+        X_seq.append(X[i:i+seq_length])
+        
+        # Output sequence/value for each target
+        for k, y in y_dict.items():
+            y_seq_dict[k].append(y[i+seq_length])
+    
+    # Convert to numpy arrays
+    X_seq = np.array(X_seq)
+    y_seq = [np.array(y_seq_dict[k]) for k in sorted(y_seq_dict.keys())]
+    
+    return X_seq, y_seq
+
+def build_multi_horizon_lstm_model(seq_length, n_features, n_outputs, lstm_units=64, dropout_rate=0.2, dense_units=32, learning_rate=0.001):
+    """
+    Bygger en multi-output LSTM model til at forudsige flere horisonter samtidigt.
+    """
+    # Input layer
+    inputs = tf.keras.layers.Input(shape=(seq_length, n_features))
+    
+    # LSTM layers
+    x = tf.keras.layers.LSTM(lstm_units, return_sequences=True)(inputs)
+    x = tf.keras.layers.Dropout(dropout_rate)(x)
+    x = tf.keras.layers.LSTM(lstm_units)(x)
+    x = tf.keras.layers.Dropout(dropout_rate)(x)
+    
+    # Common dense layer
+    x = tf.keras.layers.Dense(dense_units, activation='relu')(x)
+    
+    # Output layers - one for each forecast horizon
+    outputs = []
+    for i in range(n_outputs):
+        output_name = f'output_{i+1}'
+        outputs.append(tf.keras.layers.Dense(1, name=output_name)(x))
+    
+    # Create model
+    model = tf.keras.models.Model(inputs=inputs, outputs=outputs)
+    
+    # Compile
     model.compile(
-        optimizer=Adam(learning_rate=0.0005),  # Lavere learning rate for bedre konvergens
+        optimizer=tf.keras.optimizers.Adam(learning_rate=learning_rate),
         loss='mse'
     )
-    
-    # Vis model summary
-    model.summary()
     
     return model
 
@@ -319,177 +338,202 @@ def evaluate_model(model, X_test_seq, y_test, target_scaler, horizon):
         'predictions': y_pred_denorm.tolist()
     }
 
-def train_model(data_splits, feature_columns, target_columns, target_scalers, best_params=None):
-    """Train LSTM models for multiple horizons."""
-    logging.info("Starting LSTM model training for multiple forecast horizons...")
+def train_model(X_train, y_train_dict, X_val, y_val_dict, feature_scaler, target_scalers, 
+                seq_length, epochs=50, batch_size=32, patience=10):
+    """
+    Træner en enkelt multi-horisont LSTM model til at forudsige alle horisonter samtidigt.
+    """
+    # Setup
+    logging.info("Preparing data for LSTM training...")
     
-    # Default parameters if not provided
-    if best_params is None:
-        best_params = {
-            'lstm_units': 250,
-            'dropout_rate': 0.3,
-            'learning_rate': 0.0005,
-            'batch_size': 8
-        }
+    # Create sequences for training and validation
+    X_train_seq, y_train_seq = create_sequences(X_train, y_train_dict, seq_length)
+    X_val_seq, y_val_seq = create_sequences(X_val, y_val_dict, seq_length)
     
-    # Dictionary to store models and metrics
-    models = {}
+    logging.info(f"Training data shape: {X_train_seq.shape}, {[y.shape for y in y_train_seq]}")
+    logging.info(f"Validation data shape: {X_val_seq.shape}, {[y.shape for y in y_val_seq]}")
+    
+    # Build model
+    logging.info("Building multi-horizon LSTM model...")
+    horizon_keys = sorted(y_train_dict.keys())
+    n_features = X_train.shape[1]
+    
+    # Hyperparameters
+    lstm_units = 64
+    dropout_rate = 0.2
+    dense_units = 32
+    learning_rate = 0.001
+    
+    model = build_multi_horizon_lstm_model(
+        seq_length=seq_length,
+        n_features=n_features, 
+        n_outputs=len(horizon_keys),
+        lstm_units=lstm_units, 
+        dropout_rate=dropout_rate,
+        dense_units=dense_units,
+        learning_rate=learning_rate
+    )
+    
+    # Early stopping
+    early_stopping = tf.keras.callbacks.EarlyStopping(
+        monitor='val_loss',
+        patience=patience,
+        restore_best_weights=True,
+        verbose=1
+    )
+    
+    # Model checkpoint
+    checkpoint_path = MODELS_DIR / "lstm_model_checkpoint.keras"
+    model_checkpoint = tf.keras.callbacks.ModelCheckpoint(
+        filepath=str(checkpoint_path),
+        save_best_only=True,
+        monitor='val_loss',
+        verbose=1
+    )
+    
+    # Tensorboard
+    log_dir = "logs/fit/" + datetime.now().strftime("%Y%m%d-%H%M%S")
+    tensorboard_callback = tf.keras.callbacks.TensorBoard(
+        log_dir=log_dir, 
+        histogram_freq=1
+    )
+    
+    # Train model
+    logging.info(f"Training LSTM model for {epochs} epochs with batch size {batch_size}...")
+    history = model.fit(
+        X_train_seq, 
+        y_train_seq,
+        epochs=epochs,
+        batch_size=batch_size,
+        validation_data=(X_val_seq, y_val_seq),
+        callbacks=[early_stopping, model_checkpoint, tensorboard_callback],
+        verbose=1
+    )
+    
+    return model, history, horizon_keys
+
+def evaluate_multi_horizon_model(model, X_test, y_test_dict, feature_scaler, target_scalers, seq_length):
+    """
+    Evaluerer multi-horisont LSTM modellen på test data.
+    """
+    logging.info("Evaluating LSTM model on test data...")
+    
+    # Prepare test data
+    X_test_seq, y_test_seq = create_sequences(X_test, y_test_dict, seq_length)
+    
+    # Evaluate model
+    logging.info(f"Test data shape: {X_test_seq.shape}, {[y.shape for y in y_test_seq]}")
+    test_loss = model.evaluate(X_test_seq, y_test_seq, verbose=0)
+    logging.info(f"Test loss: {test_loss}")
+    
+    # Make predictions for each horizon
+    predictions = model.predict(X_test_seq)
+    
+    # Calculate metrics for each horizon
     metrics = {}
-    histories = {}
-    test_metrics = {}
+    horizon_keys = sorted(y_test_dict.keys())
     
-    # For each forecast horizon
-    for target_col in target_columns:
-        horizon = target_col.split('_')[-1].replace('d', '')  # Extract horizon from column name
-        logging.info(f"Training LSTM model for {target_col} (horizon: {horizon} days)")
+    for i, horizon_key in enumerate(horizon_keys):
+        # Get target scaler for this horizon
+        target_scaler = target_scalers[horizon_key]
         
-        # Hent data for training, validation og test
-        train_data, y_train = data_splits['train']
-        val_data, y_val = data_splits['val']
-        test_data, y_test = data_splits['test']
+        # Get actual and predicted values
+        y_true = y_test_seq[i]
+        y_pred = predictions[i]
         
-        # Hent target for denne horisont
-        y_train_target = y_train[target_col]
-        y_val_target = y_val[target_col]
-        y_test_target = y_test[target_col]
+        # Inverse transform if needed (not needed if we're predicting scaled values directly)
+        y_true_inv = target_scaler.inverse_transform(y_true.reshape(-1, 1)).flatten()
+        y_pred_inv = target_scaler.inverse_transform(y_pred.reshape(-1, 1)).flatten()
         
-        # Create sequences for LSTM
-        X_train_seq, y_train_seq = create_sequences(train_data, y_train_target)
-        X_val_seq, y_val_seq = create_sequences(val_data, y_val_target)
-        X_test_seq, y_test_seq = create_sequences(test_data, y_test_target)
+        # Calculate metrics
+        mae = mean_absolute_error(y_true_inv, y_pred_inv)
+        mse = mean_squared_error(y_true_inv, y_pred_inv)
+        rmse = np.sqrt(mse)
+        r2 = r2_score(y_true_inv, y_pred_inv)
         
-        logging.info(f"Training set: {X_train_seq.shape}, Validation set: {X_val_seq.shape}, Test set: {X_test_seq.shape}")
-        
-        # Create callbacks
-        checkpoint_path = MODELS_DIR / f"lstm_checkpoint_{horizon}d.h5"
-        callbacks = [
-            EarlyStopping(monitor='val_loss', patience=20, restore_best_weights=True),
-            ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=10, min_lr=0.00001),
-            ModelCheckpoint(filepath=str(checkpoint_path), save_best_only=True, monitor='val_loss')
-        ]
-        
-        # Build model
-        model = build_lstm_model(
-            input_shape=(X_train_seq.shape[1], X_train_seq.shape[2]),
-            lstm_units=best_params['lstm_units'],
-            dropout_rate=best_params['dropout_rate']
-        )
-        
-        # Train model
-        history = model.fit(
-            X_train_seq, y_train_seq,
-            epochs=NUM_EPOCHS,  # Flere epochs med early stopping
-            batch_size=best_params['batch_size'],
-            validation_data=(X_val_seq, y_val_seq),
-            callbacks=callbacks,
-            verbose=1
-        )
-        
-        # Load best model weights
-        if checkpoint_path.exists():
-            model.load_weights(str(checkpoint_path))
-            logging.info(f"Loaded best model weights from checkpoint")
-        
-        # Evaluate on validation set
-        val_metrics = {}
-        y_val_pred = model.predict(X_val_seq).flatten()
-        
-        # Evaluate on test set
-        test_results = evaluate_model(
-            model, X_test_seq, y_test_seq, 
-            target_scalers[target_col], horizon
-        )
-        
-        # Store model and metrics
-        models[target_col] = model
-        metrics[target_col] = {
-            'val_loss': history.history['val_loss'],
-            'train_loss': history.history['loss']
-        }
-        histories[target_col] = history.history
-        test_metrics[target_col] = test_results
-    
-    return models, metrics, histories, test_metrics
-
-def save_model(models, feature_scaler, target_scalers, metrics, histories, test_metrics, feature_columns, target_columns):
-    """Save LSTM models, scalers, and metrics."""
-    try:
-        # Save models in TensorFlow format
-        for target_col in target_columns:
-            horizon = target_col.split('_')[-1].replace('d', '')
-            model_path = MODELS_DIR / f"lstm_model_{horizon}d.keras"
-            models[target_col].save(model_path)
-            logging.info(f"LSTM model for {horizon}-day forecast saved to {model_path}")
-        
-        # Save feature scaler
-        feature_scaler_path = MODELS_DIR / "lstm_feature_scaler.joblib"
-        joblib.dump(feature_scaler, feature_scaler_path)
-        
-        # Save target scalers
-        target_scalers_path = MODELS_DIR / "lstm_target_scalers.joblib"
-        joblib.dump(target_scalers, target_scalers_path)
-        
-        # Save feature names and target columns
-        feature_names_path = MODELS_DIR / "lstm_feature_names.joblib"
-        joblib.dump(feature_columns, feature_names_path)
-        
-        target_columns_path = MODELS_DIR / "lstm_target_columns.joblib"
-        joblib.dump(target_columns, target_columns_path)
-        
-        # Save sequence length
-        sequence_length_path = MODELS_DIR / "lstm_sequence_length.joblib"
-        joblib.dump(SEQUENCE_LENGTH, sequence_length_path)
-        
-        # Create metrics dict including test metrics
-        metrics_dict = {
-            'training_metrics': {target: {
-                'final_val_loss': float(metrics[target]['val_loss'][-1]),
-                'final_train_loss': float(metrics[target]['train_loss'][-1]),
-                'best_val_loss': float(min(metrics[target]['val_loss'])),
-                'best_epoch': metrics[target]['val_loss'].index(min(metrics[target]['val_loss'])) + 1
-            } for target in target_columns},
-            'test_metrics': test_metrics,
-            'training_history': {target: {
-                'loss': [float(x) for x in histories[target]['loss']],
-                'val_loss': [float(x) for x in histories[target]['val_loss']]
-            } for target in target_columns}
+        # Store metrics
+        metrics[horizon_key] = {
+            'mae': float(mae),
+            'mse': float(mse),
+            'rmse': float(rmse),
+            'r2': float(r2)
         }
         
-        # Plot training history
-        for target_col in target_columns:
-            horizon = target_col.split('_')[-1].replace('d', '')
-            plt.figure(figsize=(10, 6))
-            plt.plot(histories[target_col]['loss'], label='Training Loss')
-            plt.plot(histories[target_col]['val_loss'], label='Validation Loss')
-            plt.title(f'LSTM Training History - {horizon}-day Horizon (Vestas)')
-            plt.xlabel('Epoch')
-            plt.ylabel('Loss (MSE)')
-            plt.legend()
-            plt.grid(True)
-            
-            # Gem plot
-            history_path = FIGURES_DIR / f"lstm_history_{horizon}d.png"
-            plt.savefig(history_path)
-            plt.close()
-            logging.info(f"Saved training history plot to {history_path}")
-        
-        # Save metrics as JSON
-        metrics_path = MODELS_DIR / "lstm_training_metrics.json"
-        with open(metrics_path, 'w') as f:
-            json.dump(metrics_dict, f, indent=4)
-        
-        logging.info(f"All LSTM model artifacts saved successfully")
-        return True
-    except Exception as e:
-        logging.error(f"Error saving LSTM model artifacts: {e}")
-        return False
+        logging.info(f"Metrics for {horizon_key}:")
+        logging.info(f"  MAE: {mae:.4f}")
+        logging.info(f"  MSE: {mse:.4f}")
+        logging.info(f"  RMSE: {rmse:.4f}")
+        logging.info(f"  R²: {r2:.4f}")
+    
+    return metrics
 
+def save_multi_horizon_model(model, feature_scaler, target_scalers, metrics, feature_names, target_columns, seq_length, history=None):
+    """
+    Gemmer multi-horisont LSTM model, scalers og metrics.
+    """
+    logging.info("Saving LSTM model artifacts...")
+    
+    # Create directory if it doesn't exist
+    MODELS_DIR.mkdir(parents=True, exist_ok=True)
+    
+    # Save model
+    model_path = MODELS_DIR / "lstm_multi_horizon_model.keras"
+    model.save(str(model_path))
+    logging.info(f"Model saved to {model_path}")
+    
+    # Save feature scaler
+    feature_scaler_path = MODELS_DIR / "lstm_feature_scaler.joblib"
+    joblib.dump(feature_scaler, feature_scaler_path)
+    
+    # Save target scalers
+    target_scalers_path = MODELS_DIR / "lstm_target_scalers.joblib"
+    joblib.dump(target_scalers, target_scalers_path)
+    
+    # Save feature names
+    feature_names_path = MODELS_DIR / "lstm_feature_names.joblib"
+    joblib.dump(feature_names, feature_names_path)
+    
+    # Save target columns
+    target_columns_path = MODELS_DIR / "lstm_target_columns.joblib"
+    joblib.dump(target_columns, target_columns_path)
+    
+    # Save sequence length
+    seq_length_path = MODELS_DIR / "lstm_sequence_length.joblib"
+    joblib.dump(seq_length, seq_length_path)
+    
+    # Save metrics
+    metrics_path = MODELS_DIR / "lstm_metrics.json"
+    with open(metrics_path, 'w') as f:
+        json.dump(metrics, f, indent=4)
+    
+    # Save training history if available
+    if history:
+        history_dict = {
+            'loss': history.history['loss'],
+            'val_loss': history.history['val_loss']
+        }
+        
+        # Save outputs for each horizon
+        for i, target_col in enumerate(target_columns):
+            output_name = f'output_{i+1}'
+            if f'{output_name}_loss' in history.history:
+                history_dict[f'{target_col}_loss'] = history.history[f'{output_name}_loss']
+                history_dict[f'{target_col}_val_loss'] = history.history[f'{output_name}_val_loss']
+        
+        history_path = MODELS_DIR / "lstm_training_history.json"
+        with open(history_path, 'w') as f:
+            # Convert numpy arrays to lists for JSON serialization
+            serializable_history = {k: [float(val) for val in v] for k, v in history_dict.items()}
+            json.dump(serializable_history, f, indent=4)
+    
+    logging.info("LSTM model artifacts saved successfully")
+    
 def main():
     """
-    Main function to orchestrate the training process for LSTM models
+    Main function to orchestrate the training process for a multi-horizon LSTM model
     """
     start_time = time.time()
-    logging.info("==== Starting LSTM model training process for Vestas stock price prediction ====")
+    logging.info("==== Starting Multi-Horizon LSTM model training process for Vestas stock prediction ====")
     
     # Tjek om TensorFlow GPU er tilgængeligt
     gpu_available = len(tf.config.list_physical_devices('GPU')) > 0
@@ -514,26 +558,140 @@ def main():
     best_params = hyperparameter_tuning(data_splits, target_columns[0])  # Tune on first target
     logging.info(f"Hyperparameter tuning complete")
     
-    # Train models for each forecast horizon
-    models, metrics, histories, test_metrics = train_model(
-        data_splits, feature_columns, target_columns, target_scalers, best_params
+    # Train multi-horizon model
+    model, history, test_metrics = train_model(
+        data_splits['train'][0], data_splits['train'][1],
+        data_splits['val'][0], data_splits['val'][1],
+        feature_scaler, target_scalers, SEQUENCE_LENGTH
     )
     
-    # Save models and metrics
-    save_success = save_model(
-        models, feature_scaler, target_scalers, 
-        metrics, histories, test_metrics, 
-        feature_columns, target_columns
+    # Save model and metrics
+    save_success = save_multi_horizon_model(
+        model, feature_scaler, target_scalers, 
+        test_metrics, feature_columns, target_columns, SEQUENCE_LENGTH, history
     )
     
     if save_success:
-        logging.info("LSTM models and metrics saved successfully")
+        logging.info("Multi-horizon LSTM model and metrics saved successfully")
     else:
-        logging.warning("Failed to save LSTM models or metrics")
+        logging.warning("Failed to save multi-horizon LSTM model or metrics")
     
-    logging.info(f"==== LSTM model training completed in {(time.time() - start_time) / 60:.2f} minutes ====")
+    logging.info(f"==== Multi-horizon LSTM model training completed in {(time.time() - start_time) / 60:.2f} minutes ====")
     
-    return models, metrics, test_metrics
+    return model, history, test_metrics
 
 if __name__ == "__main__":
-    main()
+    # Configure logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+    
+    # Create directories if they don't exist
+    MODELS_DIR.mkdir(parents=True, exist_ok=True)
+    
+    # Set random seeds for reproducibility
+    np.random.seed(42)
+    tf.random.set_seed(42)
+    
+    try:
+        # Load and prepare data
+        logging.info("Loading data...")
+        features_file = PROCESSED_FEATURES_DIR / "vestas_features_trading_days.csv"
+        df = pd.read_csv(features_file)
+        
+        if 'Date' in df.columns:
+            df['Date'] = pd.to_datetime(df['Date'])
+            df = df.set_index('Date')
+        
+        # Define target columns - one for each forecast horizon
+        forecast_horizons = [1, 3, 7]  # 1, 3, and 7 days ahead
+        target_columns = [f'target_close_{h}d' for h in forecast_horizons]
+        
+        # Check if target columns exist
+        for col in target_columns:
+            if col not in df.columns:
+                raise ValueError(f"Target column {col} not found in data")
+        
+        # Remove rows with NaN in target columns
+        df = df.dropna(subset=target_columns)
+        
+        # Split data into train, validation, and test sets
+        train_size = 0.7
+        val_size = 0.15
+        
+        # Sort by date
+        df = df.sort_index()
+        
+        # Define train, validation, and test indices
+        n = len(df)
+        train_idx = int(n * train_size)
+        val_idx = train_idx + int(n * val_size)
+        
+        df_train = df.iloc[:train_idx]
+        df_val = df.iloc[train_idx:val_idx]
+        df_test = df.iloc[val_idx:]
+        
+        logging.info(f"Train size: {len(df_train)}")
+        logging.info(f"Validation size: {len(df_val)}")
+        logging.info(f"Test size: {len(df_test)}")
+        
+        # Select features (all columns except target columns)
+        feature_columns = [col for col in df.columns if col not in target_columns]
+        
+        # Scale features
+        feature_scaler = StandardScaler()
+        X_train = feature_scaler.fit_transform(df_train[feature_columns])
+        X_val = feature_scaler.transform(df_val[feature_columns])
+        X_test = feature_scaler.transform(df_test[feature_columns])
+        
+        # Scale targets (one scaler for each target)
+        target_scalers = {}
+        y_train_dict = {}
+        y_val_dict = {}
+        y_test_dict = {}
+        
+        for target_col in target_columns:
+            scaler = StandardScaler()
+            
+            # Scale each target
+            y_train_dict[target_col] = scaler.fit_transform(df_train[[target_col]]).flatten()
+            y_val_dict[target_col] = scaler.transform(df_val[[target_col]]).flatten()
+            y_test_dict[target_col] = scaler.transform(df_test[[target_col]]).flatten()
+            
+            # Store scaler
+            target_scalers[target_col] = scaler
+        
+        # Define sequence length
+        seq_length = 30  # 30 days of historic data
+        
+        # Hyperparameters
+        epochs = 100
+        batch_size = 32
+        patience = 10
+        
+        # Train model
+        model, history, horizon_keys = train_model(
+            X_train, y_train_dict, X_val, y_val_dict,
+            feature_scaler, target_scalers, seq_length,
+            epochs=epochs, batch_size=batch_size, patience=patience
+        )
+        
+        # Evaluate model
+        metrics = evaluate_multi_horizon_model(
+            model, X_test, y_test_dict,
+            feature_scaler, target_scalers, seq_length
+        )
+        
+        # Save model and artifacts
+        save_multi_horizon_model(
+            model, feature_scaler, target_scalers, 
+            metrics, feature_columns, target_columns, 
+            seq_length, history
+        )
+        
+        logging.info("LSTM model training completed successfully")
+        
+    except Exception as e:
+        logging.error(f"Error in LSTM model training: {e}")
+        traceback.print_exc()
