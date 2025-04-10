@@ -13,6 +13,8 @@ def run_module(module_name, skip_errors=False):
     """Run a Python module by name"""
     try:
         logging.info(f"Starting module: {module_name}")
+        # Tilføj sys.path til at inkludere projektets rod
+        sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
         module = importlib.import_module(module_name)
         if hasattr(module, 'main'):
             result = module.main()
@@ -48,8 +50,12 @@ def main():
                       help='Choose which model to train (default: lstm)')
     args = parser.parse_args()
     
+    # Tilføj sys.path til at inkludere projektets rod
+    project_root = Path(__file__).resolve().parents[2]
+    sys.path.insert(0, str(project_root))
+    
     # Load environment variables from .env file
-    dotenv_path = Path(__file__).resolve().parents[2] / ".env"
+    dotenv_path = project_root / ".env"
     if dotenv_path.exists():
         load_dotenv(dotenv_path=dotenv_path)
         logging.info(f"Loaded environment variables from {dotenv_path}")
