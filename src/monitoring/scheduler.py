@@ -5,8 +5,12 @@ from pathlib import Path
 import json
 from datetime import datetime
 import sys
+import numpy as np
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 from pipeline.training import train_model, load_data, prepare_data, select_features
+from pipeline.training_lstm import load_data as load_lstm_data
+from pipeline.training_lstm import prepare_data as prepare_lstm_data
+from pipeline.training_lstm import train_model as train_lstm_model
 from monitoring.evaluation import ModelEvaluator
 
 # Konfigurer logging
@@ -33,27 +37,33 @@ class ModelUpdateScheduler:
     def _initialize_metrics_file(self):
         """Initialiserer metrics filen med tom struktur"""
         initial_metrics = {
-            "accuracy_history": [],
+            "lstm_accuracy_history": [],
+            "xgboost_accuracy_history": [],
             "last_update": None,
-            "model_versions": []
+            "lstm_model_versions": [],
+            "xgboost_model_versions": []
         }
         with open(self.metrics_file, 'w') as f:
             json.dump(initial_metrics, f, indent=4)
     
-    def update_model_metrics(self, accuracy):
-        """Opdaterer metrics filen med nye metrics"""
+    def update_model_metrics(self, model_type, accuracy):
+        """Opdaterer metrics filen med nye metrics for en specifik model type"""
         try:
             with open(self.metrics_file, 'r') as f:
                 metrics = json.load(f)
             
+            # Vælg den korrekte historik og version liste baseret på model type
+            history_key = f"{model_type}_accuracy_history"
+            versions_key = f"{model_type}_model_versions"
+            
             # Tilføj nye metrics
-            metrics["accuracy_history"].append({
+            metrics[history_key].append({
                 "date": datetime.now().strftime("%Y-%m-%d"),
                 "accuracy": accuracy
             })
             metrics["last_update"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            metrics["model_versions"].append({
-                "version": len(metrics["model_versions"]) + 1,
+            metrics[versions_key].append({
+                "version": len(metrics[versions_key]) + 1,
                 "date": datetime.now().strftime("%Y-%m-%d"),
                 "accuracy": accuracy
             })
@@ -62,34 +72,51 @@ class ModelUpdateScheduler:
             with open(self.metrics_file, 'w') as f:
                 json.dump(metrics, f, indent=4)
             
-            logger.info(f"Metrics opdateret med ny accuracy: {accuracy:.4f}")
+            logger.info(f"{model_type} metrics opdateret med ny accuracy: {accuracy:.4f}")
             
         except Exception as e:
-            logger.error(f"Fejl ved opdatering af metrics: {e}")
+            logger.error(f"Fejl ved opdatering af {model_type} metrics: {e}")
     
-    def update_model(self):
-        """Opdaterer modellen med ny data og evaluerer performance"""
+    def update_models(self):
+        """Opdaterer både LSTM og XGBoost modeller med ny data og evaluerer performance"""
         try:
             logger.info("Starter daglig model opdatering...")
             
-            # Load og forbered data
+            # Opdater XGBoost model
             df = load_data()
             if df is None:
-                raise ValueError("Kunne ikke indlæse data")
+                raise ValueError("Kunne ikke indlæse data for XGBoost")
             
             X, y_dict, feature_columns, target_columns, scaler = prepare_data(df)
             X_selected, selected_features = select_features(X, y_dict, feature_columns)
             
-            # Træn ny model
+            # Træn ny XGBoost model
             models, metrics, feature_importances = train_model(
                 X_selected, y_dict, selected_features, target_columns
             )
             
-            # Opdater metrics
-            accuracy = metrics['accuracy']
-            self.update_model_metrics(accuracy)
+            # Opdater XGBoost metrics
+            xgboost_accuracy = metrics['accuracy']
+            self.update_model_metrics('xgboost', xgboost_accuracy)
             
-            logger.info(f"Model opdateret succesfuldt. Ny accuracy: {accuracy:.4f}")
+            # Opdater LSTM model
+            df_lstm = load_lstm_data()
+            if df_lstm is None:
+                raise ValueError("Kunne ikke indlæse data for LSTM")
+            
+            # Forbered data for LSTM
+            data_splits, feature_columns, target_columns, target_scalers = prepare_lstm_data(df_lstm)
+            
+            # Træn LSTM model
+            models, metrics, histories, test_metrics = train_lstm_model(
+                data_splits, feature_columns, target_columns, target_scalers
+            )
+            
+            # Opdater LSTM metrics (brug gennemsnitlig accuracy over alle horizons)
+            lstm_accuracy = np.mean([m['accuracy'] for m in test_metrics.values()])
+            self.update_model_metrics('lstm', lstm_accuracy)
+            
+            logger.info(f"Modeller opdateret succesfuldt. XGBoost accuracy: {xgboost_accuracy:.4f}, LSTM accuracy: {lstm_accuracy:.4f}")
             
         except Exception as e:
             logger.error(f"Fejl under model opdatering: {e}")
@@ -104,10 +131,10 @@ class ModelUpdateScheduler:
         logger.info("Starter model update scheduler...")
         
         # Planlæg daglig opdatering kl. 01:00
-        schedule.every().day.at("01:00").do(self.update_model)
+        schedule.every().day.at("01:00").do(self.update_models)
         
         # Kør første opdatering med det samme
-        self.update_model()
+        self.update_models()
         
         # Hold scheduler kørende
         while self.is_running:
