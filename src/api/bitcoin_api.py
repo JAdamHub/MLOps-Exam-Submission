@@ -10,6 +10,7 @@ import json
 from typing import Dict, List, Any, Optional
 import tensorflow as tf
 from datetime import datetime, timedelta
+import time
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -311,117 +312,143 @@ async def get_features():
 @app.post("/predict/lstm")
 async def predict_price_lstm(days_ahead: Optional[int] = None):
     """
-    Forudsig Bitcoin-pris med LSTM-model
-    
-    Hvis days_ahead er angivet, vil modellen forudsige prisen specifikt for den dag.
-    Ellers returneres forudsigelser for 1, 3 og 7 dage frem.
+    Forudsiger prisen for Vestas aktier ved hjælp af LSTM modellen.
     """
-    if not lstm_models:
-        raise HTTPException(status_code=500, detail="LSTM models not loaded")
-    
-    if bitcoin_data is None:
-        raise HTTPException(status_code=500, detail="Bitcoin data not loaded")
-    
     try:
-        # Hent de sidste lstm_sequence_length dages data
-        recent_data = bitcoin_data.tail(lstm_sequence_length).copy()
-        
-        # Log information om dataene for debugging
-        logger.info(f"Bitcoin data columns: {bitcoin_data.columns.tolist()}")
-        logger.info(f"LSTM feature names: {lstm_feature_names}")
-        logger.info(f"Recent data shape: {recent_data.shape}")
-        
-        # Forbered features - kun de kolonner vi har i lstm_feature_names
-        available_features = [col for col in lstm_feature_names if col in recent_data.columns]
-        missing_features = set(lstm_feature_names) - set(available_features)
-        
-        if missing_features:
-            logger.warning(f"Missing features for LSTM: {missing_features}")
-            # Fyld ud med dummy-værdier for manglende features
-            for feature in missing_features:
-                recent_data[feature] = 0.0  # Dummy værdi
-            # Opdater listen over tilgængelige features
-            available_features = [col for col in lstm_feature_names if col in recent_data.columns]
-        
-        # Få data i den rigtige rækkefølge
-        X = recent_data[available_features].values
-        
-        logger.info(f"X shape before scaling: {X.shape}")
-        logger.info(f"Expected feature count: {len(lstm_feature_names)}")
-        
-        # Skaler data
-        if lstm_feature_scaler is not None:
-            X = lstm_feature_scaler.transform(X)
-        
-        # Omform til den korrekte sekvensform for LSTM
-        X_seq = np.array([X])  # Tilføj batch dimension
-        
-        # Hent aktuel pris som reference
-        current_price = float(bitcoin_data['price'].iloc[-1])
-        
-        # Forudsigelser
-        predictions = {}
-        if days_ahead is not None:
-            # Bruger har angivet specifik dag
-            # Find den nærmeste model (1d, 3d eller 7d)
-            closest_horizon = None
-            min_diff = float('inf')
-            
-            for horizon in lstm_models.keys():
-                horizon_days = int(horizon.replace('d', ''))
-                diff = abs(days_ahead - horizon_days)
-                if diff < min_diff:
-                    min_diff = diff
-                    closest_horizon = horizon
-            
-            if closest_horizon:
-                scaled_pred = lstm_models[closest_horizon].predict(X_seq)[0][0]
-                
-                # Inverter skalering for at få faktisk pris
-                if closest_horizon in lstm_target_scalers:
-                    try:
-                        actual_pred = lstm_target_scalers[closest_horizon].inverse_transform(
-                            [[scaled_pred]])[0][0]
-                    except:
-                        # Hvis der er fejl med inverse_transform, fortolker vi direkte
-                        # Værdierne ser meget lave ud, så vi antager at de er ændringer/pct
-                        actual_pred = current_price * (1 + scaled_pred)
-                else:
-                    actual_pred = current_price * (1 + scaled_pred)
-                
-                predictions[f"{days_ahead}d"] = float(actual_pred)
-            else:
-                raise HTTPException(status_code=404, detail="No suitable model found")
+        # Standardværdi hvis ingen dage er angivet
+        valid_horizons = [1, 3, 7]
+        if days_ahead is None:
+            # Returner alle prognosehorisonter hvis ingen er specificeret
+            return_all = True
         else:
-            # Returner alle tilgængelige forudsigelser (1d, 3d, 7d)
-            for horizon, model in lstm_models.items():
-                scaled_pred = model.predict(X_seq)[0][0]
+            # Find den nærmeste gyldige horisont
+            return_all = False
+            closest_horizon = min(valid_horizons, key=lambda x: abs(x - days_ahead))
+            if closest_horizon != days_ahead:
+                logging.warning(f"Requested horizon {days_ahead} not available. Using closest: {closest_horizon}")
+                days_ahead = closest_horizon
+
+        # Load model og scalers
+        model = None
+        for attempt in range(3):  # Prøv at loade modellen op til 3 gange
+            try:
+                model_path = MODELS_DIR / "lstm_multi_horizon_model.keras"
+                if not model_path.exists():
+                    raise FileNotFoundError(f"Model file not found: {model_path}")
                 
-                # Inverter skalering for at få faktisk pris
-                if horizon in lstm_target_scalers:
-                    try:
-                        actual_pred = lstm_target_scalers[horizon].inverse_transform(
-                            [[scaled_pred]])[0][0]
-                    except:
-                        # Fortolk som procentvis ændring
-                        actual_pred = current_price * (1 + scaled_pred)
-                else:
-                    actual_pred = current_price * (1 + scaled_pred)
-                
-                predictions[horizon] = float(actual_pred)
+                model = tf.keras.models.load_model(model_path)
+                logging.info(f"LSTM model loaded successfully")
+                break
+            except Exception as e:
+                logging.error(f"Error loading LSTM model (attempt {attempt+1}): {e}")
+                time.sleep(1)  # Vent lidt før næste forsøg
         
-        # Tilføj aktuel pris som reference
-        predictions['current_price'] = current_price
+        if model is None:
+            raise Exception("Failed to load LSTM model after multiple attempts")
+            
+        # Load scalers og andre artefakter
+        feature_scaler_path = MODELS_DIR / "lstm_feature_scaler.joblib"
+        target_scalers_path = MODELS_DIR / "lstm_target_scalers.joblib"
+        feature_names_path = MODELS_DIR / "lstm_feature_names.joblib"
+        seq_length_path = MODELS_DIR / "lstm_sequence_length.joblib"
+        target_columns_path = MODELS_DIR / "lstm_target_columns.joblib"
+        
+        feature_scaler = joblib.load(feature_scaler_path)
+        target_scalers = joblib.load(target_scalers_path)
+        feature_columns = joblib.load(feature_names_path)
+        seq_length = joblib.load(seq_length_path)
+        target_columns = joblib.load(target_columns_path)
+        
+        # Hent seneste data
+        df = load_latest_data()
+        if df is None or len(df) < seq_length:
+            raise ValueError(f"Not enough data available. Need at least {seq_length} data points")
+        
+        # Forbered features
+        X = df[feature_columns].values
+        X_scaled = feature_scaler.transform(X)
+        
+        # Opret sekvens for LSTM input
+        X_seq = []
+        for i in range(len(X_scaled) - seq_length + 1):
+            X_seq.append(X_scaled[i:i+seq_length])
+        X_seq = np.array(X_seq)
+        
+        # Lav prediction
+        predictions = model.predict(X_seq[-1:])  # Brug kun den seneste sekvens
+        
+        # Beregn tidspunkter for prognoser
+        last_date = df.index[-1]
+        trading_days = pd.read_csv(RAW_STOCKS_DIR / "vestas_trading_days.csv")
+        trading_days['Date'] = pd.to_datetime(trading_days['Date'])
+        trading_days = trading_days.set_index('Date')
+        
+        # Resultater for alle prognosehorisonter
+        results = {}
+        
+        for i, target_col in enumerate(target_columns):
+            horizon = int(target_col.split('_')[-1].replace('d', ''))
+            target_scaler = target_scalers[target_col]
+            
+            # Skip if we're only returning one horizon and this isn't it
+            if not return_all and horizon != days_ahead:
+                continue
+                
+            # Denormalisér prædiktionen
+            prediction = predictions[i][0]
+            prediction_denorm = target_scaler.inverse_transform([[prediction]])[0][0]
+            
+            # Find future dato
+            future_date = None
+            future_idx = trading_days.index.get_indexer([last_date])[0] + horizon
+            if future_idx < len(trading_days):
+                future_date = trading_days.index[future_idx].strftime('%Y-%m-%d')
+            else:
+                # Hvis vi ikke har nok handelsdage, estimer dato ved at tilføje X handelsdage
+                future_date = (last_date + pd.Timedelta(days=horizon+2)).strftime('%Y-%m-%d')
+                
+            # Gem resultat for denne horisont
+            results[str(horizon)] = {
+                "predicted_price": float(round(prediction_denorm, 2)),
+                "prediction_date": future_date,
+                "horizon_days": horizon
+            }
+            
+        # Log prædiktionen
+        logging.info(f"LSTM predictions generated: {results}")
         
         return {
-            "predictions": predictions,
-            "model_type": "lstm",
-            "timestamp": datetime.now().isoformat()
+            "vestas_predictions": results,
+            "last_price": float(df['Close'].iloc[-1]),
+            "last_price_date": df.index[-1].strftime('%Y-%m-%d'),
+            "model_type": "LSTM (Multi-horizon)"
         }
         
     except Exception as e:
-        logger.error(f"LSTM prediction error: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"LSTM prediction error: {str(e)}")
+        logging.error(f"Error making LSTM prediction: {e}")
+        raise HTTPException(status_code=500, detail=f"Error making prediction: {str(e)}")
+        
+def load_latest_data():
+    """
+    Indlæser den seneste data til LSTM-forudsigelse.
+    """
+    try:
+        # Indlæs de behandlede features
+        filepath = PROCESSED_FEATURES_DIR / "vestas_features_trading_days.csv"
+        df = pd.read_csv(filepath)
+        
+        # Konverter dato til datetime
+        df['Date'] = pd.to_datetime(df['Date'])
+        df = df.set_index('Date')
+        
+        # Sortér efter dato for at sikre at vi får de seneste data
+        df = df.sort_index()
+        
+        logging.info(f"Loaded latest data for LSTM prediction, shape: {df.shape}")
+        return df
+    except Exception as e:
+        logging.error(f"Error loading latest data for prediction: {e}")
+        return None
 
 if __name__ == "__main__":
     import uvicorn
