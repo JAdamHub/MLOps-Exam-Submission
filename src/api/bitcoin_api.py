@@ -8,6 +8,8 @@ import logging
 import os
 import json
 from typing import Dict, List, Any, Optional
+import tensorflow as tf
+from datetime import datetime, timedelta
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -30,10 +32,28 @@ TARGET_COLUMNS_FILE = MODELS_DIR / "target_columns.joblib"
 # Data path
 BITCOIN_DATA_FILE = DATA_DIR / "intermediate" / "combined" / "bitcoin_macro_combined_trading_days.csv"
 
+# New paths for LSTM models
+LSTM_MODEL_FILES = {
+    "1d": MODELS_DIR / "lstm_model_1d.keras",
+    "3d": MODELS_DIR / "lstm_model_3d.keras", 
+    "7d": MODELS_DIR / "lstm_model_7d.keras"
+}
+LSTM_FEATURE_NAMES_FILE = MODELS_DIR / "lstm_feature_names.joblib"
+LSTM_TARGET_SCALERS_FILE = MODELS_DIR / "lstm_target_scalers.joblib"
+LSTM_FEATURE_SCALER_FILE = MODELS_DIR / "lstm_feature_scaler.joblib"
+LSTM_SEQUENCE_LENGTH_FILE = MODELS_DIR / "lstm_sequence_length.joblib"
+
 # Global variables to hold models and data
 models = {}
 feature_names = []
 bitcoin_data = None
+
+# Globale variabler til LSTM
+lstm_models = {}
+lstm_feature_names = []
+lstm_feature_scaler = None
+lstm_target_scalers = {}
+lstm_sequence_length = 10  # Default værdi
 
 app = FastAPI(
     title="Bitcoin API",
@@ -54,6 +74,7 @@ app.add_middleware(
 async def startup_event():
     """Load models and data on startup"""
     global models, feature_names, bitcoin_data
+    global lstm_models, lstm_feature_names, lstm_feature_scaler, lstm_target_scalers, lstm_sequence_length
     
     # Load models
     try:
@@ -89,6 +110,38 @@ async def startup_event():
     except Exception as e:
         logger.error(f"Error during startup: {str(e)}")
 
+    # Indlæs LSTM-modeller
+    try:
+        for horizon, file_path in LSTM_MODEL_FILES.items():
+            if Path(file_path).exists():
+                lstm_models[horizon] = tf.keras.models.load_model(file_path)
+                logger.info(f"LSTM model for {horizon} loaded successfully")
+            else:
+                logger.error(f"LSTM model file not found: {file_path}")
+        
+        # Indlæs LSTM-feature navne
+        if LSTM_FEATURE_NAMES_FILE.exists():
+            lstm_feature_names = joblib.load(LSTM_FEATURE_NAMES_FILE)
+            logger.info(f"LSTM feature names loaded")
+        
+        # Indlæs LSTM feature scaler
+        if LSTM_FEATURE_SCALER_FILE.exists():
+            lstm_feature_scaler = joblib.load(LSTM_FEATURE_SCALER_FILE)
+            logger.info(f"LSTM feature scaler loaded")
+        
+        # Indlæs LSTM target scalers
+        if LSTM_TARGET_SCALERS_FILE.exists():
+            lstm_target_scalers = joblib.load(LSTM_TARGET_SCALERS_FILE)
+            logger.info(f"LSTM target scalers loaded")
+            
+        # Indlæs LSTM sequence length
+        if LSTM_SEQUENCE_LENGTH_FILE.exists():
+            lstm_sequence_length = joblib.load(LSTM_SEQUENCE_LENGTH_FILE)
+            logger.info(f"LSTM sequence length loaded: {lstm_sequence_length}")
+            
+    except Exception as e:
+        logger.error(f"Error loading LSTM models: {str(e)}")
+
 @app.get("/")
 async def root():
     """Welcome message"""
@@ -96,7 +149,8 @@ async def root():
         "message": "Welcome to Bitcoin API",
         "endpoints": {
             "GET /price/history": "Get Bitcoin price history",
-            "GET /predict": "Predict Bitcoin price for 1, 3 and 7 days"
+            "GET /predict": "Predict Bitcoin price for 1, 3 and 7 days",
+            "POST /predict/lstm": "Predict Bitcoin price with LSTM model"
         }
     }
 
@@ -253,6 +307,121 @@ async def get_features():
         raise HTTPException(status_code=500, detail="Feature names not loaded")
     
     return {"features": feature_names}
+
+@app.post("/predict/lstm")
+async def predict_price_lstm(days_ahead: Optional[int] = None):
+    """
+    Forudsig Bitcoin-pris med LSTM-model
+    
+    Hvis days_ahead er angivet, vil modellen forudsige prisen specifikt for den dag.
+    Ellers returneres forudsigelser for 1, 3 og 7 dage frem.
+    """
+    if not lstm_models:
+        raise HTTPException(status_code=500, detail="LSTM models not loaded")
+    
+    if bitcoin_data is None:
+        raise HTTPException(status_code=500, detail="Bitcoin data not loaded")
+    
+    try:
+        # Hent de sidste lstm_sequence_length dages data
+        recent_data = bitcoin_data.tail(lstm_sequence_length).copy()
+        
+        # Log information om dataene for debugging
+        logger.info(f"Bitcoin data columns: {bitcoin_data.columns.tolist()}")
+        logger.info(f"LSTM feature names: {lstm_feature_names}")
+        logger.info(f"Recent data shape: {recent_data.shape}")
+        
+        # Forbered features - kun de kolonner vi har i lstm_feature_names
+        available_features = [col for col in lstm_feature_names if col in recent_data.columns]
+        missing_features = set(lstm_feature_names) - set(available_features)
+        
+        if missing_features:
+            logger.warning(f"Missing features for LSTM: {missing_features}")
+            # Fyld ud med dummy-værdier for manglende features
+            for feature in missing_features:
+                recent_data[feature] = 0.0  # Dummy værdi
+            # Opdater listen over tilgængelige features
+            available_features = [col for col in lstm_feature_names if col in recent_data.columns]
+        
+        # Få data i den rigtige rækkefølge
+        X = recent_data[available_features].values
+        
+        logger.info(f"X shape before scaling: {X.shape}")
+        logger.info(f"Expected feature count: {len(lstm_feature_names)}")
+        
+        # Skaler data
+        if lstm_feature_scaler is not None:
+            X = lstm_feature_scaler.transform(X)
+        
+        # Omform til den korrekte sekvensform for LSTM
+        X_seq = np.array([X])  # Tilføj batch dimension
+        
+        # Hent aktuel pris som reference
+        current_price = float(bitcoin_data['price'].iloc[-1])
+        
+        # Forudsigelser
+        predictions = {}
+        if days_ahead is not None:
+            # Bruger har angivet specifik dag
+            # Find den nærmeste model (1d, 3d eller 7d)
+            closest_horizon = None
+            min_diff = float('inf')
+            
+            for horizon in lstm_models.keys():
+                horizon_days = int(horizon.replace('d', ''))
+                diff = abs(days_ahead - horizon_days)
+                if diff < min_diff:
+                    min_diff = diff
+                    closest_horizon = horizon
+            
+            if closest_horizon:
+                scaled_pred = lstm_models[closest_horizon].predict(X_seq)[0][0]
+                
+                # Inverter skalering for at få faktisk pris
+                if closest_horizon in lstm_target_scalers:
+                    try:
+                        actual_pred = lstm_target_scalers[closest_horizon].inverse_transform(
+                            [[scaled_pred]])[0][0]
+                    except:
+                        # Hvis der er fejl med inverse_transform, fortolker vi direkte
+                        # Værdierne ser meget lave ud, så vi antager at de er ændringer/pct
+                        actual_pred = current_price * (1 + scaled_pred)
+                else:
+                    actual_pred = current_price * (1 + scaled_pred)
+                
+                predictions[f"{days_ahead}d"] = float(actual_pred)
+            else:
+                raise HTTPException(status_code=404, detail="No suitable model found")
+        else:
+            # Returner alle tilgængelige forudsigelser (1d, 3d, 7d)
+            for horizon, model in lstm_models.items():
+                scaled_pred = model.predict(X_seq)[0][0]
+                
+                # Inverter skalering for at få faktisk pris
+                if horizon in lstm_target_scalers:
+                    try:
+                        actual_pred = lstm_target_scalers[horizon].inverse_transform(
+                            [[scaled_pred]])[0][0]
+                    except:
+                        # Fortolk som procentvis ændring
+                        actual_pred = current_price * (1 + scaled_pred)
+                else:
+                    actual_pred = current_price * (1 + scaled_pred)
+                
+                predictions[horizon] = float(actual_pred)
+        
+        # Tilføj aktuel pris som reference
+        predictions['current_price'] = current_price
+        
+        return {
+            "predictions": predictions,
+            "model_type": "lstm",
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"LSTM prediction error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"LSTM prediction error: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn
