@@ -15,6 +15,8 @@ import tensorflow.keras.backend as K
 from tensorflow.keras.models import Model
 from tensorflow.keras.layers import LSTM, Dense, Dropout, Bidirectional, Input, RepeatVector, Flatten, Activation, Multiply, Lambda, Permute
 from tensorflow.keras.optimizers import Adam
+from pandas.tseries.holiday import USFederalHolidayCalendar
+from pandas.tseries.offsets import CustomBusinessDay
 
 # Enable unsafe deserialization for Lambda layer
 import keras
@@ -30,6 +32,41 @@ def custom_lambda_layer(tensor):
     # Based on error message, we know input shape is (None, 30, 128)
     # Return tensor unchanged
     return tensor
+
+# Function to constrain price predictions to realistic values
+def constrain_price_prediction(prediction: float, current_price: float, horizon_days: int) -> float:
+    """
+    Constrain price predictions to a realistic range based on the current price and time horizon.
+    
+    Args:
+        prediction: The raw predicted price value
+        current_price: The latest actual price
+        horizon_days: Number of days ahead for the prediction
+        
+    Returns:
+        A constrained price prediction within realistic bounds
+    """
+    # Define maximum daily percent change (can be adjusted based on domain knowledge)
+    # 5% for 1-day horizon, 3% for each additional day (diminishing effects)
+    max_daily_pct_change = 0.05
+    max_pct_change = max_daily_pct_change * min(horizon_days, 1) + 0.03 * max(0, horizon_days - 1)
+    
+    # Calculate absolute bounds
+    max_prediction = current_price * (1 + max_pct_change)
+    min_prediction = current_price * (1 - max_pct_change)
+    
+    # Constrain the prediction to the bounds
+    constrained_prediction = max(min_prediction, min(prediction, max_prediction))
+    
+    # Log if constraint was applied
+    if constrained_prediction != prediction:
+        logger.warning(
+            f"Constrained prediction for {horizon_days}-day horizon " +
+            f"from {prediction:.2f} to {constrained_prediction:.2f} " +
+            f"(current price: {current_price:.2f})"
+        )
+    
+    return constrained_prediction
 
 # Define the function used by the Lambda layer in the saved model
 def sum_over_time_axis(x):
@@ -59,6 +96,7 @@ LSTM_TARGET_SCALERS_FILE = MODELS_DIR / "lstm_target_scalers.joblib"
 LSTM_FEATURE_SCALER_FILE = MODELS_DIR / "lstm_feature_scaler.joblib"
 LSTM_SEQUENCE_LENGTH_FILE = MODELS_DIR / "lstm_sequence_length.joblib"
 LSTM_TARGET_COLUMNS_FILE = MODELS_DIR / "lstm_target_columns.joblib"
+LSTM_FEATURE_MEDIANS_FILE = MODELS_DIR / "lstm_feature_medians.joblib"
 
 # Global variables
 vestas_data = None
@@ -68,6 +106,7 @@ lstm_feature_scaler = None
 lstm_target_scalers = {}
 lstm_sequence_length = 30  # Default værdi, overskrives ved indlæsning
 lstm_target_columns = []
+lstm_feature_medians = {}
 
 app = FastAPI(
     title="Vestas Stock API",
@@ -87,8 +126,59 @@ app.add_middleware(
 @app.on_event("startup")
 async def startup_event():
     """Load models and data on startup"""
-    global vestas_data, lstm_model, lstm_feature_names, lstm_feature_scaler, lstm_target_scalers, lstm_sequence_length, lstm_target_columns
+    global vestas_data, lstm_model, lstm_feature_names, lstm_feature_scaler, lstm_target_scalers, lstm_sequence_length, lstm_target_columns, lstm_feature_medians
     
+    # --- Load metadata first (needed for model potentially) ---
+    try:
+        # Load feature names and validate
+        if LSTM_FEATURE_NAMES_FILE.exists():
+            lstm_feature_names = joblib.load(LSTM_FEATURE_NAMES_FILE)
+            logger.info(f"LSTM feature names loaded: {len(lstm_feature_names)} features")
+            # Log a sample of feature names for validation
+            if lstm_feature_names:
+                sample_size = min(5, len(lstm_feature_names))
+                logger.info(f"Sample feature names: {lstm_feature_names[:sample_size]}...")
+                
+                # Validate if feature file exists and contains required features
+                if PROCESSED_FEATURES_FILE.exists():
+                    try:
+                        # Just read the column names without loading all data
+                        feature_df = pd.read_csv(PROCESSED_FEATURES_FILE, nrows=1)
+                        available_features = feature_df.columns.tolist()
+                        
+                        # Check for missing features
+                        missing_features = set(lstm_feature_names) - set(available_features)
+                        if missing_features:
+                            logger.error(f"Feature file is missing {len(missing_features)} required features: {list(missing_features)[:5]}...")
+                        else:
+                            logger.info(f"Feature file contains all {len(lstm_feature_names)} required features")
+                    except Exception as e:
+                        logger.error(f"Error validating feature file: {str(e)}")
+                else:
+                    logger.error(f"Feature file for prediction not found: {PROCESSED_FEATURES_FILE}")
+        else:
+            logger.error(f"LSTM feature names file not found: {LSTM_FEATURE_NAMES_FILE}")
+            lstm_feature_names = [] # Ensure it's a list
+    
+        # Load sequence length
+        if LSTM_SEQUENCE_LENGTH_FILE.exists():
+            lstm_sequence_length = joblib.load(LSTM_SEQUENCE_LENGTH_FILE)
+            logger.info(f"LSTM sequence length loaded: {lstm_sequence_length}")
+        else:
+            logger.error(f"LSTM sequence length file not found: {LSTM_SEQUENCE_LENGTH_FILE}")
+    
+        # Load target columns
+        if LSTM_TARGET_COLUMNS_FILE.exists():
+            lstm_target_columns = joblib.load(LSTM_TARGET_COLUMNS_FILE)
+            logger.info(f"LSTM target columns loaded: {lstm_target_columns}")
+        else:
+            logger.error(f"LSTM target columns file not found: {LSTM_TARGET_COLUMNS_FILE}")
+            lstm_target_columns = [] # Ensure it's a list
+    except Exception as e:
+        logger.error(f"Error loading model metadata: {str(e)}")
+        lstm_feature_names = []
+        lstm_target_columns = []
+
     # Load Vestas data
     try:
         if VESTAS_DATA_FILE.exists():
@@ -294,32 +384,62 @@ async def startup_event():
 
         # --- Load feature scaler ---
         if LSTM_FEATURE_SCALER_FILE.exists():
-            lstm_feature_scaler = joblib.load(LSTM_FEATURE_SCALER_FILE)
-            logger.info(f"LSTM feature scaler loaded ({type(lstm_feature_scaler)})")
-            # Log StandardScaler specific attributes
-            if hasattr(lstm_feature_scaler, 'mean_') and hasattr(lstm_feature_scaler, 'scale_'):
-                 logger.info(f"  Feature Scaler Mean (partial): {lstm_feature_scaler.mean_[:5]}...") # Log first 5 means
-                 logger.info(f"  Feature Scaler Scale (partial): {lstm_feature_scaler.scale_[:5]}...") # Log first 5 scales
-            else:
-                 logger.warning("Loaded feature scaler might not be a StandardScaler or lacks expected attributes.")
+            try:
+                lstm_feature_scaler = joblib.load(LSTM_FEATURE_SCALER_FILE)
+                logger.info(f"LSTM feature scaler loaded ({type(lstm_feature_scaler)})")
+                # Validate the scaler type
+                expected_scaler_type = "MinMaxScaler"
+                scaler_type = type(lstm_feature_scaler).__name__
+                if scaler_type != expected_scaler_type:
+                    logger.warning(f"Unexpected feature scaler type: {scaler_type}. Expected: {expected_scaler_type}")
+                
+                # Validate scaler attributes
+                if hasattr(lstm_feature_scaler, 'data_min_') and hasattr(lstm_feature_scaler, 'data_max_'):
+                    logger.info(f"Feature Scaler Data Min (partial): {lstm_feature_scaler.data_min_[:5]}...")
+                    logger.info(f"Feature Scaler Data Max (partial): {lstm_feature_scaler.data_max_[:5]}...")
+                    logger.info(f"Feature scale range: [{lstm_feature_scaler.feature_range[0]}, {lstm_feature_scaler.feature_range[1]}]")
+                else:
+                    logger.warning("Feature scaler missing expected MinMaxScaler attributes. Data scaling may be inconsistent.")
+            except Exception as e:
+                logger.error(f"Error loading feature scaler: {str(e)}")
+                lstm_feature_scaler = None
         else:
             logger.error(f"LSTM feature scaler file not found: {LSTM_FEATURE_SCALER_FILE}")
+            lstm_feature_scaler = None
 
         # --- Load target scalers ---
         if LSTM_TARGET_SCALERS_FILE.exists():
-            lstm_target_scalers = joblib.load(LSTM_TARGET_SCALERS_FILE)
-            logger.info(f"LSTM target scalers loaded ({len(lstm_target_scalers)} scalers)")
-            # Log scaler info for debugging
-            for target_col, scaler in lstm_target_scalers.items():
-                logger.info(f"Scaler for {target_col}: {type(scaler)}")
-                # Log StandardScaler specific attributes
-                if hasattr(scaler, 'mean_') and hasattr(scaler, 'scale_'):
-                    logger.info(f"  Target Scaler Mean: {scaler.mean_}")
-                    logger.info(f"  Target Scaler Scale: {scaler.scale_}")
-                else:
-                    logger.warning(f"Loaded target scaler for {target_col} might not be a StandardScaler or lacks expected attributes.")
+            try:
+                lstm_target_scalers = joblib.load(LSTM_TARGET_SCALERS_FILE)
+                logger.info(f"LSTM target scalers loaded ({len(lstm_target_scalers)} scalers)")
+                
+                # Validate each target scaler
+                valid_scalers = True
+                for target_col, scaler in lstm_target_scalers.items():
+                    expected_scaler_type = "MinMaxScaler"
+                    scaler_type = type(scaler).__name__
+                    if scaler_type != expected_scaler_type:
+                        logger.warning(f"Unexpected target scaler type for {target_col}: {scaler_type}. Expected: {expected_scaler_type}")
+                        valid_scalers = False
+                        continue
+                        
+                    # Log MinMaxScaler specific attributes
+                    if hasattr(scaler, 'data_min_') and hasattr(scaler, 'data_max_'):
+                        logger.info(f"Target Scaler {target_col} - Min: {scaler.data_min_}")
+                        logger.info(f"Target Scaler {target_col} - Max: {scaler.data_max_}")
+                        logger.info(f"Target Scaler {target_col} - Scale range: [{scaler.feature_range[0]}, {scaler.feature_range[1]}]")
+                    else:
+                        logger.warning(f"Target scaler for {target_col} is missing expected MinMaxScaler attributes")
+                        valid_scalers = False
+                
+                if not valid_scalers:
+                    logger.warning("Some target scalers have validation issues. Predictions may be inaccurate.")
+            except Exception as e:
+                logger.error(f"Error loading target scalers: {str(e)}")
+                lstm_target_scalers = {}
         else:
             logger.error(f"LSTM target scalers file not found: {LSTM_TARGET_SCALERS_FILE}")
+            lstm_target_scalers = {}
 
     except Exception as e:
         logger.error(f"Error loading LSTM model and artifacts: {str(e)}")
@@ -329,6 +449,27 @@ async def startup_event():
         lstm_target_scalers = {}
         lstm_feature_names = []
         lstm_target_columns = []
+        lstm_feature_medians = {}
+
+    # Load feature medians AFTER other artifacts
+    try:
+        if LSTM_FEATURE_MEDIANS_FILE.exists():
+            lstm_feature_medians = joblib.load(LSTM_FEATURE_MEDIANS_FILE)
+            logger.info(f"LSTM feature medians loaded ({len(lstm_feature_medians)} medians)")
+            # Log a few median values for verification
+            logged_medians = 0
+            for k, v in lstm_feature_medians.items():
+                if logged_medians < 5:
+                    logger.info(f"  Median for '{k}': {v}")
+                    logged_medians += 1
+                else:
+                    break
+        else:
+            logger.error(f"LSTM feature medians file not found: {LSTM_FEATURE_MEDIANS_FILE}")
+            lstm_feature_medians = {} # Ensure it's an empty dict if file not found
+    except Exception as e:
+        logger.error(f"Error loading LSTM feature medians: {str(e)}")
+        lstm_feature_medians = {}
 
 @app.get("/")
 async def root():
@@ -356,7 +497,8 @@ async def health_check():
         "lstm_feature_names_loaded": len(lstm_feature_names) > 0,
         "lstm_feature_scaler_loaded": lstm_feature_scaler is not None,
         "lstm_target_scalers_loaded": len(lstm_target_scalers) > 0,
-        "lstm_sequence_length": lstm_sequence_length
+        "lstm_sequence_length": lstm_sequence_length,
+        "lstm_feature_medians_loaded": len(lstm_feature_medians) > 0
     }
 
 @app.get("/price/history")
@@ -493,22 +635,30 @@ async def predict_price_lstm(days_ahead: Optional[int] = None):
             # Get current date in proper format
             current_date = datetime.now().strftime('%Y-%m-%d')
             
+            # Use current price from user, or a reasonable default if not available
+            current_price = 11.43  # Current price from user
+            
             for horizon in [1, 3, 7]:
                 if not return_all and horizon != days_ahead:
                     continue
                     
-                # Ensure future date is properly formatted
-                future_date = (datetime.now() + timedelta(days=horizon)).strftime('%Y-%m-%d')
+                # Ensure future date is properly formatted using trading days
+                future_date = get_next_trading_days(datetime.now(), horizon).strftime('%Y-%m-%d')
+                
+                # Generate a more realistic simulated value
+                simulated_price = current_price * (1 + 0.01 * horizon)  # 1% increase per day
+                simulated_price = constrain_price_prediction(simulated_price, current_price, horizon)
                 
                 results[str(horizon)] = {
-                    "predicted_price": 150.0 + horizon * 2.5,  # Simulated value
+                    "predicted_price": float(round(simulated_price, 2)),
                     "prediction_date": future_date,
                     "horizon_days": horizon,
+                    "trading_days": horizon,  # Clarify that this is trading days
                     "simulated": True
                 }
             return {
                 "vestas_predictions": results,
-                "last_price": 150.0,  # Simulated value
+                "last_price": current_price,
                 "last_price_date": current_date,
                 "model_type": "LSTM (Multi-horizon)",
                 "note": "Using simulated values due to insufficient data"
@@ -559,22 +709,30 @@ async def predict_price_lstm(days_ahead: Optional[int] = None):
             results = {}
             current_date = datetime.now().strftime('%Y-%m-%d')
             
+            # Generate a more realistic simulated value
+            current_price = 11.43  # Hardcoded current price as fallback
+            
             for horizon in [1, 3, 7]:
                 if not return_all and horizon != days_ahead:
                     continue
                     
-                # Ensure future date is properly formatted
-                future_date = (datetime.now() + timedelta(days=horizon)).strftime('%Y-%m-%d')
+                # Ensure future date is properly formatted using trading days
+                future_date = get_next_trading_days(datetime.now(), horizon).strftime('%Y-%m-%d')
+                
+                # Generate a more realistic simulated value
+                simulated_price = current_price * (1 + 0.01 * horizon)  # 1% increase per day
+                simulated_price = constrain_price_prediction(simulated_price, current_price, horizon)
                 
                 results[str(horizon)] = {
-                    "predicted_price": 150.0 + horizon * 2.5,  # Simulated value
+                    "predicted_price": float(round(simulated_price, 2)),
                     "prediction_date": future_date,
                     "horizon_days": horizon,
+                    "trading_days": horizon,  # Clarify that this is trading days
                     "simulated": True
                 }
             return {
                 "vestas_predictions": results,
-                "last_price": 150.0,  # Simulated value
+                "last_price": 11.43,  # Use a more realistic current price
                 "last_price_date": current_date,
                 "model_type": "LSTM (Multi-horizon)",
                 "note": "Using simulated values due to model prediction error"
@@ -584,10 +742,34 @@ async def predict_price_lstm(days_ahead: Optional[int] = None):
         last_date = df.index[-1] if isinstance(df.index, pd.DatetimeIndex) else pd.to_datetime(df['Date'].iloc[-1] if 'Date' in df else datetime.now())
         
         # Get last known price
-        last_price = float(df['Close'].iloc[-1]) if 'Close' in df.columns else float(df.iloc[:, 0].iloc[-1])
+        price_column = None
+        for candidate in ['Close', 'close', 'price', 'Price']:
+            if candidate in df.columns:
+                price_column = candidate
+                break
+        
+        if price_column is None:
+            logger.warning("Could not find price column in data, using first column as fallback")
+            last_price = float(df.iloc[:, 0].iloc[-1])
+        else:
+            last_price = float(df[price_column].iloc[-1])
         
         # Results for all forecast horizons
         results = {}
+        
+        # Check if this is a percent-change model or direct price prediction model
+        # We look for metadata to determine this
+        metadata_path = MODELS_DIR / "lstm_model_metadata.json"
+        is_percent_change_model = False
+        
+        if metadata_path.exists():
+            try:
+                with open(metadata_path, 'r') as f:
+                    metadata = json.load(f)
+                    is_percent_change_model = metadata.get('is_percent_change_model', False)
+                    logger.info(f"Model is {'percent-change' if is_percent_change_model else 'direct-price'} prediction type")
+            except Exception as e:
+                logger.warning(f"Could not read model metadata: {e}. Assuming direct price prediction model.")
         
         # Process predictions based on model output type
         if isinstance(predictions, list):
@@ -610,6 +792,19 @@ async def predict_price_lstm(days_ahead: Optional[int] = None):
                     # Ensure the shape is correct for inverse_transform
                     if pred_array.shape[1] != 1:
                         pred_array = pred_array.reshape(-1, 1)
+
+                    # --- DIAGNOSTIC LOGGING START ---
+                    scaler_instance = lstm_target_scalers[target_col]
+                    logger.info(f"[{target_col}] Raw predicted value (scaled): {pred_value}")
+                    logger.info(f"[{target_col}] Using scaler type: {type(scaler_instance)}")
+                    if hasattr(scaler_instance, 'data_min_'): # MinMaxScaler specific
+                         logger.info(f"[{target_col}] Scaler data_min_: {scaler_instance.data_min_}")
+                    if hasattr(scaler_instance, 'data_max_'): # MinMaxScaler specific
+                         logger.info(f"[{target_col}] Scaler data_max_: {scaler_instance.data_max_}")
+                    if hasattr(scaler_instance, 'data_range_'): # MinMaxScaler specific
+                         logger.info(f"[{target_col}] Scaler data_range_: {scaler_instance.data_range_}")
+                    # --- DIAGNOSTIC LOGGING END ---
+
                     # Log scaler info for debugging
                     logger.info(f"Using scaler for {target_col}: {type(lstm_target_scalers[target_col])}")
                     if hasattr(lstm_target_scalers[target_col], 'scale_'):
@@ -627,15 +822,32 @@ async def predict_price_lstm(days_ahead: Optional[int] = None):
                 else:
                     # If no scaler, use raw value
                     prediction_denorm = pred_value
+                    logger.warning(f"[{target_col}] No scaler found. Using raw predicted value: {prediction_denorm}") # Added warning
+                
+                # If model predicts percent change, convert to absolute price
+                if is_percent_change_model:
+                    # prediction_denorm is now the percent change
+                    logger.info(f"Converting percent change {prediction_denorm:.2f}% to price with base price {last_price:.2f}")
                     
-                # Calculate future date
-                future_date = (last_date + pd.Timedelta(days=horizon)).strftime('%Y-%m-%d')
+                    # Convert percent to absolute price change
+                    price_prediction = last_price * (1 + prediction_denorm/100)
+                    logger.info(f"Percent-based price prediction: {price_prediction:.2f}")
+                else:
+                    # Model predicts price directly
+                    price_prediction = prediction_denorm
+                
+                # Apply constraint to get realistic prediction
+                price_prediction = constrain_price_prediction(price_prediction, last_price, horizon)
+                    
+                # Calculate future date based on trading days, not calendar days
+                future_date = get_next_trading_days(last_date, horizon).strftime('%Y-%m-%d')
                 
                 # Save result for this horizon
                 results[str(horizon)] = {
-                    "predicted_price": float(round(prediction_denorm, 2)),
+                    "predicted_price": float(round(price_prediction, 2)),
                     "prediction_date": future_date,
-                    "horizon_days": horizon
+                    "horizon_days": horizon,
+                    "trading_days": horizon  # Clarify that this is trading days
                 }
         else:
             # Single output model
@@ -668,6 +880,19 @@ async def predict_price_lstm(days_ahead: Optional[int] = None):
                         # Ensure the shape is correct for inverse_transform
                         if pred_array.shape[1] != 1:
                             pred_array = pred_array.reshape(-1, 1)
+
+                        # --- DIAGNOSTIC LOGGING START ---
+                        scaler_instance = lstm_target_scalers[target_col]
+                        logger.info(f"[{target_col}] Raw predicted value (scaled): {pred_value}")
+                        logger.info(f"[{target_col}] Using scaler type: {type(scaler_instance)}")
+                        if hasattr(scaler_instance, 'data_min_'): # MinMaxScaler specific
+                             logger.info(f"[{target_col}] Scaler data_min_: {scaler_instance.data_min_}")
+                        if hasattr(scaler_instance, 'data_max_'): # MinMaxScaler specific
+                             logger.info(f"[{target_col}] Scaler data_max_: {scaler_instance.data_max_}")
+                        if hasattr(scaler_instance, 'data_range_'): # MinMaxScaler specific
+                             logger.info(f"[{target_col}] Scaler data_range_: {scaler_instance.data_range_}")
+                        # --- DIAGNOSTIC LOGGING END ---
+
                         # Log scaler info for debugging
                         logger.info(f"Using scaler for {target_col}: {type(lstm_target_scalers[target_col])}")
                         if hasattr(lstm_target_scalers[target_col], 'scale_'):
@@ -685,32 +910,63 @@ async def predict_price_lstm(days_ahead: Optional[int] = None):
                     else:
                         # If no scaler, use raw value
                         prediction_denorm = pred_value
+                        logger.warning(f"[{target_col}] No scaler found. Using raw predicted value: {prediction_denorm}") # Added warning
                         
-                    # Calculate future date
-                    future_date = (last_date + pd.Timedelta(days=horizon)).strftime('%Y-%m-%d')
+                    # If model predicts percent change, convert to absolute price
+                    if is_percent_change_model:
+                        # prediction_denorm is now the percent change
+                        logger.info(f"Converting percent change {prediction_denorm:.2f}% to price with base price {last_price:.2f}")
+                        
+                        # Convert percent to absolute price change
+                        price_prediction = last_price * (1 + prediction_denorm/100)
+                        logger.info(f"Percent-based price prediction: {price_prediction:.2f}")
+                    else:
+                        # Model predicts price directly
+                        price_prediction = prediction_denorm
+                        
+                    # Apply constraint to get realistic prediction
+                    price_prediction = constrain_price_prediction(price_prediction, last_price, horizon)
+                        
+                    # Calculate future date based on trading days, not calendar days
+                    future_date = get_next_trading_days(last_date, horizon).strftime('%Y-%m-%d')
                     
                     # Save result for this horizon
                     results[str(horizon)] = {
-                        "predicted_price": float(round(prediction_denorm, 2)),
+                        "predicted_price": float(round(price_prediction, 2)),
                         "prediction_date": future_date,
-                        "horizon_days": horizon
+                        "horizon_days": horizon,
+                        "trading_days": horizon  # Clarify that this is trading days
                     }
             else:
                 # If output doesn't match expected number of targets
                 logger.warning(f"Model output size {len(pred_values)} doesn't match target columns {len(lstm_target_columns)}")
-                # For demo purposes, return simulated values
-                for i, target_col in enumerate(lstm_target_columns):
-                    horizon = int(target_col.split('_')[-1].replace('d', ''))
-                    
-                    # Skip if we're only returning one horizon and this isn't it
+                # For demo purposes, return simulated values if data is not available
+                # (Keep existing simulation logic for now)
+                logger.warning("Returning simulated values due to insufficient data.")
+                results = {}
+                
+                # Get current date in proper format
+                current_date = datetime.now().strftime('%Y-%m-%d')
+                
+                # Use current price from user, or a reasonable default if not available
+                current_price = 11.43  # Current price from user
+                
+                for horizon in [1, 3, 7]:
                     if not return_all and horizon != days_ahead:
                         continue
                         
-                    future_date = (last_date + pd.Timedelta(days=horizon)).strftime('%Y-%m-%d')
+                    # Ensure future date is properly formatted using trading days
+                    future_date = get_next_trading_days(datetime.now(), horizon).strftime('%Y-%m-%d')
+                    
+                    # Generate a more realistic simulated value
+                    simulated_price = current_price * (1 + 0.01 * horizon)  # 1% increase per day
+                    simulated_price = constrain_price_prediction(simulated_price, current_price, horizon)
+                    
                     results[str(horizon)] = {
-                        "predicted_price": float(round(last_price * (1 + horizon * 0.01), 2)),
+                        "predicted_price": float(round(simulated_price, 2)),
                         "prediction_date": future_date,
                         "horizon_days": horizon,
+                        "trading_days": horizon,  # Clarify that this is trading days
                         "simulated": True
                     }
             
@@ -753,36 +1009,53 @@ def load_latest_data(required_features: List[str]):
 
     # --- Post-loading checks and preparation ---
     if df is None:
-        # This case should technically not be reached if file loading fails above,
-        # but added as a safeguard.
         logger.error("Dataframe is None after attempting to load file.")
         return None
 
     # Ensure date column is datetime and set as index
     date_col_found = False
     if 'Date' in df.columns:
-        df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
-        if df['Date'].isna().any():
-            logger.warning("Some dates in 'Date' column could not be parsed. Dropping these rows.")
-            df = df.dropna(subset=['Date'])
-        df = df.set_index('Date')
-        date_col_found = True
+        try:
+            df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
+            # Log some date values for debugging
+            logger.info(f"Date sample values: {df['Date'].head(3).tolist()}")
+            if df['Date'].isna().any():
+                logger.warning(f"Some dates in 'Date' column could not be parsed. Found {df['Date'].isna().sum()} NaN dates.")
+                df = df.dropna(subset=['Date'])
+            df = df.set_index('Date')
+            date_col_found = True
+        except Exception as e:
+            logger.error(f"Error converting 'Date' column to datetime: {e}")
     elif 'date' in df.columns:
-        df['date'] = pd.to_datetime(df['date'], errors='coerce')
-        if df['date'].isna().any():
-            logger.warning("Some dates in 'date' column could not be parsed. Dropping these rows.")
-            df = df.dropna(subset=['date'])
-        df = df.set_index('date')
-        date_col_found = True
+        try:
+            df['date'] = pd.to_datetime(df['date'], errors='coerce')
+            # Log some date values for debugging
+            logger.info(f"date sample values: {df['date'].head(3).tolist()}")
+            if df['date'].isna().any():
+                logger.warning(f"Some dates in 'date' column could not be parsed. Found {df['date'].isna().sum()} NaN dates.")
+                df = df.dropna(subset=['date'])
+            df = df.set_index('date')
+            date_col_found = True
+        except Exception as e:
+            logger.error(f"Error converting 'date' column to datetime: {e}")
 
     if not date_col_found:
-         logger.warning("No 'Date' or 'date' column found. Trying to use index if it's DatetimeIndex.")
-         if not isinstance(df.index, pd.DatetimeIndex):
-              logger.error("Data does not have a usable date column or DatetimeIndex.")
-              return None # Cannot proceed without proper time ordering
+        logger.warning("No 'Date' or 'date' column found. Trying to use index if it's DatetimeIndex.")
+        if not isinstance(df.index, pd.DatetimeIndex):
+            try:
+                # Try to convert index to datetime
+                df.index = pd.to_datetime(df.index, errors='coerce')
+                if df.index.isna().any():
+                    logger.warning(f"Some values in index could not be parsed as dates. Found {df.index.isna().sum()} NaN dates.")
+                    df = df.dropna()
+                logger.info(f"Converted index to DatetimeIndex. Sample dates: {df.index[:3].tolist()}")
+            except Exception as e:
+                logger.error(f"Error converting index to DatetimeIndex: {e}")
+                return None  # Cannot proceed without proper time ordering
 
     # Sort by date
     df = df.sort_index()
+    logger.info(f"Data sorted by date. Date range: {df.index.min()} to {df.index.max()}")
 
     # Check for required features *before* returning
     missing_features = set(required_features) - set(df.columns)
@@ -793,12 +1066,22 @@ def load_latest_data(required_features: List[str]):
     # Handle potential infinities and NaNs in features (use median from training if possible, else log warning)
     for col in required_features:
          if df[col].isin([np.inf, -np.inf]).any():
-              logger.warning(f"Feature '{col}' contains infinite values. Replacing with NaN.")
+              inf_count = df[col].isin([np.inf, -np.inf]).sum()
+              logger.warning(f"Feature '{col}' contains {inf_count} infinite values. Replacing with NaN.")
               df[col] = df[col].replace([np.inf, -np.inf], np.nan)
          if df[col].isna().any():
-              median_val = df[col].median() # Calculate median from the loaded data as fallback
-              logger.warning(f"Feature '{col}' contains NaN values. Filling with median ({median_val}).")
-              df[col] = df[col].fillna(median_val)
+              nan_count = df[col].isna().sum()
+              # --- MODIFIED NaN HANDLING ---
+              if col in lstm_feature_medians:
+                  median_val = lstm_feature_medians[col]
+                  logger.warning(f"Feature '{col}' contains {nan_count} NaN values. Filling with PRELOADED median ({median_val}).")
+                  df[col] = df[col].fillna(median_val)
+              else:
+                  # Fallback if median for this specific feature wasn't loaded (should not happen ideally)
+                  fallback_median = df[col].median()
+                  logger.error(f"Feature '{col}' contains {nan_count} NaN values, BUT median not found in preloaded medians! Using fallback median ({fallback_median}).")
+                  df[col] = df[col].fillna(fallback_median)
+              # --- END MODIFIED NaN HANDLING ---
 
     logger.info(f"Data loaded successfully from {source_path}. Final shape for prediction preparation: {df.shape}")
     return df
@@ -876,6 +1159,49 @@ def build_seq2seq_model(input_shape, horizon_keys=['1d', '3d', '7d']):
     logging.info(f"Model structure built successfully with {len(outputs)} outputs.")
     # model.summary(print_fn=logging.info) # Optional: Log summary for verification
     return model
+
+def is_trading_day(date):
+    """
+    Checks if a given date is a trading day (not weekend or holiday).
+    
+    Args:
+        date: Date to check (datetime)
+        
+    Returns:
+        bool: True if trading day, False otherwise
+    """
+    # Skip weekends
+    if date.weekday() >= 5:  # 5=Saturday, 6=Sunday
+        return False
+    
+    # Simplified holiday check (should be expanded for production)
+    # Here we just use US holidays as an approximation
+    us_holidays = USFederalHolidayCalendar()
+    holidays = us_holidays.holidays(start=date, end=date)
+    return len(holidays) == 0
+
+def get_next_trading_days(start_date, num_days):
+    """
+    Calculates the next N trading days from a given start date.
+    
+    Args:
+        start_date: Starting date (datetime)
+        num_days: Number of trading days to advance
+        
+    Returns:
+        datetime: Date that is num_days trading days after start_date
+    """
+    if isinstance(start_date, str):
+        start_date = pd.to_datetime(start_date)
+    
+    # Define custom business day that excludes weekends and holidays
+    dk_holidays = USFederalHolidayCalendar()  # Approximation, should use Danish calendar
+    business_days = CustomBusinessDay(calendar=dk_holidays)
+    
+    # Get the date that is num_days trading days ahead
+    future_date = start_date + business_days * num_days
+    
+    return future_date
 
 if __name__ == "__main__":
     import uvicorn

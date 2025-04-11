@@ -130,12 +130,41 @@ def prepare_data(df):
             # Begræns ekstreme værdier
             df[col] = df[col].clip(-1e10, 1e10)
     
+    # --- NY KODE: Konverter target til procentvis ændring ---
+    # Gem de oprindelige målværdier til senere konvertering tilbage
+    original_target_values = {}
+    for target_col in target_columns:
+        original_target_values[target_col] = df[target_col].values.copy()
+    
+    # Find 'Close' eller lignende kolonne for den aktuelle pris
+    price_column = None
+    for candidate in ['Close', 'close', 'price', 'Price']:
+        if candidate in df.columns:
+            price_column = candidate
+            break
+    
+    if price_column is None:
+        raise ValueError("Kunne ikke finde priskolonne i dataframen (Close, close, price, Price)")
+    
+    # Konverter targets til procentvise ændringer
+    for target_col in target_columns:
+        horizon = int(target_col.split('_')[-1].replace('d', ''))
+        # Beregn procentvis ændring fra nuværende pris til target pris
+        df[f'pct_change_{target_col}'] = ((df[target_col] / df[price_column]) - 1) * 100
+        logging.info(f"Konverteret {target_col} til procent ændring: Middel = {df[f'pct_change_{target_col}'].mean():.2f}%, Std = {df[f'pct_change_{target_col}'].std():.2f}%")
+    
+    # Opdater target_columns til at bruge de nye procentvise kolonner
+    percent_target_columns = [f'pct_change_{col}' for col in target_columns]
+    logging.info(f"Nye target kolonner med procentvise ændringer: {percent_target_columns}")
+    # --- SLUT PÅ NY KODE ---
+    
     X = df[feature_columns].values
     
     # Create dictionary of targets for different horizons
     y_dict = {}
-    for target_col in target_columns:
-        y_dict[target_col] = df[target_col].values
+    for i, target_col in enumerate(target_columns):
+        # Brug den procentvise ændring som target
+        y_dict[target_col] = df[percent_target_columns[i]].values
     
     # Scale features using MinMaxScaler (bedre for LSTM end StandardScaler)
     feature_scaler = MinMaxScaler()
@@ -145,7 +174,8 @@ def prepare_data(df):
     target_scalers = {}
     for target_col in target_columns:
         target_scaler = MinMaxScaler()
-        y_dict[target_col] = target_scaler.fit_transform(y_dict[target_col].reshape(-1, 1)).flatten()
+        y_values = y_dict[target_col].reshape(-1, 1)
+        y_dict[target_col] = target_scaler.fit_transform(y_values).flatten()
         target_scalers[target_col] = target_scaler
     
     # Split data into training (64%), validation (16%), and test (20%) sets
@@ -176,6 +206,15 @@ def prepare_data(df):
         'train': (train_data, y_train),
         'val': (val_data, y_val),
         'test': (test_data, y_test)
+    }
+    
+    # Gem de oprindelige prisværdier for at kunne konvertere tilbage
+    data_splits['original_prices'] = {
+        'price_column': price_column,
+        'last_price_train': df[price_column].iloc[train_val_size-1],
+        'last_price_val': df[price_column].iloc[train_size-1],
+        'last_price_test': df[price_column].iloc[-1],
+        'test_prices': df[price_column].iloc[train_size:].values
     }
     
     return data_splits, feature_columns, target_columns, feature_scaler, target_scalers
@@ -497,54 +536,61 @@ def hyperparameter_tuning(data_splits, target_col):
     return best_params
 
 def evaluate_model(model, X_test_seq, y_test, target_scaler, horizon):
-    """Evaluér model på testdata og returner detaljerede metrics."""
+    """Evaluerer modellen med test data."""
     # Forudsig på testdata
-    y_pred = model.predict(X_test_seq).flatten()
+    predictions = model.predict(X_test_seq)
     
-    # Hvis dataene var skaleret, denormalisér dem
-    if target_scaler is not None:
-        y_test_denorm = target_scaler.inverse_transform(y_test.reshape(-1, 1)).flatten()
-        y_pred_denorm = target_scaler.inverse_transform(y_pred.reshape(-1, 1)).flatten()
+    # Omform forudsigelser til 1D
+    if isinstance(predictions, list):
+        # Hvis vi har multiple outputs, find det rette baseret på horisonten
+        pred_index = FORECAST_HORIZONS.index(horizon)
+        predictions = predictions[pred_index]
+
+    # Reshape til 2D for inverse transform
+    predictions = predictions.reshape(-1, 1)
+    
+    # Konverter y_test til 2D hvis det er 1D
+    if y_test.ndim == 1:
+        y_test_2d = y_test.reshape(-1, 1)
     else:
-        y_test_denorm = y_test
-        y_pred_denorm = y_pred
+        y_test_2d = y_test
     
-    # Beregn metrics
-    mae = mean_absolute_error(y_test_denorm, y_pred_denorm)
-    mse = mean_squared_error(y_test_denorm, y_pred_denorm)
+    # Denormalisér forudsigelser og faktiske værdier
+    predictions_denorm = target_scaler.inverse_transform(predictions)
+    y_test_denorm = target_scaler.inverse_transform(y_test_2d)
+    
+    # --- NY KODE: Konverter procentvis ændring tilbage til prisværdier ---
+    # Dette kræver at vi kender den aktuelle pris for hver testdag
+    # Vi kan bruge de gemte testpriser fra prepare_data
+    # Dette vil blive implementeret i evaluate_multi_horizon_model
+    # --- SLUT PÅ NY KODE ---
+    
+    # Beregn fejlmål
+    mse = mean_squared_error(y_test_denorm, predictions_denorm)
     rmse = np.sqrt(mse)
-    r2 = r2_score(y_test_denorm, y_pred_denorm)
+    mae = mean_absolute_error(y_test_denorm, predictions_denorm)
     
-    # Vis metrics
-    logging.info(f"\nTest Set Metrics for {horizon}-day horizon:")
-    logging.info(f"MAE: {mae:.2f}")
-    logging.info(f"MSE: {mse:.2f}")
-    logging.info(f"RMSE: {rmse:.2f}")
-    logging.info(f"R² Score: {r2:.4f}")
+    # R^2 score (højere er bedre, max er 1.0)
+    r2 = r2_score(y_test_denorm, predictions_denorm)
     
-    # Lav visualisering
-    plt.figure(figsize=(12, 6))
-    plt.plot(y_test_denorm, label='Actual')
-    plt.plot(y_pred_denorm, label='Predicted')
-    plt.title(f'LSTM Predictions vs Actuals - {horizon}-day Horizon (Vestas)')
-    plt.xlabel('Time')
-    plt.ylabel('Vestas Stock Price')
-    plt.legend()
-    plt.grid(True)
+    # Beregn MAPE (Mean Absolute Percentage Error)
+    mape = np.mean(np.abs((y_test_denorm - predictions_denorm) / y_test_denorm)) * 100
     
-    # Gem visualisering
-    fig_path = FIGURES_DIR / f"lstm_prediction_{horizon}d.png"
-    plt.savefig(fig_path)
-    plt.close()
-    logging.info(f"Saved prediction visualization to {fig_path}")
+    # Hvis R2 er negativ (værre end gennesnit), sæt til 0
+    r2 = max(0, r2)
+    
+    logging.info(f"{horizon}-day horizon forecast metrics:")
+    logging.info(f"MSE: {mse:.4f}, RMSE: {rmse:.4f}, MAE: {mae:.4f}")
+    logging.info(f"R^2 Score: {r2:.4f}, MAPE: {mape:.2f}%")
     
     return {
-        'mae': float(mae),
-        'mse': float(mse),
-        'rmse': float(rmse),
-        'r2': float(r2),
-        'actuals': y_test_denorm.tolist(),
-        'predictions': y_pred_denorm.tolist()
+        'mse': mse,
+        'rmse': rmse,
+        'mae': mae,
+        'r2': r2,
+        'mape': mape,
+        'predictions': predictions_denorm,
+        'actuals': y_test_denorm
     }
 
 def train_model(model, X_train, y_train_dict, X_val, y_val_dict, 
@@ -633,197 +679,224 @@ def train_model(model, X_train, y_train_dict, X_val, y_val_dict,
 
 def evaluate_multi_horizon_model(model, X_test, y_test_dict, horizon_keys, scaler=None):
     """
-    Evaluerer en seq2seq model på testdata.
-    
-    Args:
-        model: Trænet seq2seq model
-        X_test: Test features (samples, seq_length, features)
-        y_test_dict: Dictionary med test targets for hver horisont
-        horizon_keys: Liste med horisonter (f.eks. '1d', '3d', '7d')
-        scaler: Scaler til at inverse transformere targets (valgfri)
-        
-    Returns:
-        Dictionary med metrics for hver horisont
+    Evaluerer modellen på testdata for alle horisonter.
     """
-    logging.info(f"Evaluerer seq2seq model på {len(X_test)} test samples")
-    
-    # Forudsig på testdata
-    y_pred_dict = {}
+    # Get predictions for each horizon
     predictions = model.predict(X_test)
     
-    # Hvis modellen returnerer en enkelt array, konverter til dict
-    if not isinstance(predictions, dict):
-        if len(horizon_keys) == 1:
-            predictions = {f'output_{horizon_keys[0]}': predictions}
-        else:
-            # Antager output navne følger 'output_1d', 'output_3d' osv.
-            for i, key in enumerate(horizon_keys):
-                y_pred_dict[key] = predictions[i]
+    # Ensure predictions is a list
+    if not isinstance(predictions, list):
+        predictions = [predictions]
     
-    # Ellers, organisér forudsigelser efter horisont
-    for h in horizon_keys:
-        output_name = f'output_{h}'
-        if output_name in predictions:
-            y_pred_dict[h] = predictions[output_name]
+    evaluation_results = {}
     
-    # Beregn metrics
-    results = {}
+    # Extract original test prices for converting percentage changes back to actual prices
+    if hasattr(model, 'data_splits') and 'original_prices' in model.data_splits:
+        original_prices = model.data_splits['original_prices']
+        test_prices = original_prices['test_prices']
+        price_column = original_prices['price_column']
+        is_percent_change_model = True
+        logging.info("Evaluating percent change model - will convert back to prices")
+    else:
+        is_percent_change_model = False
     
-    for horizon in horizon_keys:
-        y_true = y_test_dict[horizon]
-        y_pred = y_pred_dict[horizon]
+    for i, h in enumerate(horizon_keys):
+        target_key = f'price_target_{h}'
+        if target_key not in y_test_dict:
+            target_key = list(y_test_dict.keys())[i]  # Fallback til rækkefølge
         
-        # Inverse transform hvis scaler er givet
-        if scaler:
-            try:
-                y_true_inv = scaler.inverse_transform(y_true)
-                y_pred_inv = scaler.inverse_transform(y_pred)
-            except:
-                logging.warning(f"Kunne ikke inverse transformere for horisont {horizon}, bruger skalerede værdier")
-                y_true_inv = y_true
-                y_pred_inv = y_pred
+        y_true = y_test_dict[target_key]
+        
+        # Reshape for inverse_transform
+        y_pred = predictions[i].reshape(-1, 1)
+        y_true = y_true.reshape(-1, 1)
+        
+        # Get scaler for this horizon
+        if scaler is not None and isinstance(scaler, dict):
+            horizon_scaler = scaler.get(target_key)
         else:
-            y_true_inv = y_true
-            y_pred_inv = y_pred
+            horizon_scaler = scaler
             
-        # Beregn metrics
-        mae = mean_absolute_error(y_true_inv, y_pred_inv)
-        mse = mean_squared_error(y_true_inv, y_pred_inv)
+        if horizon_scaler is not None:
+            # Denormalize
+            y_pred_denorm = horizon_scaler.inverse_transform(y_pred)
+            y_true_denorm = horizon_scaler.inverse_transform(y_true)
+            
+            # --- NY KODE: Konverter procentvis ændring tilbage til prisværdier ---
+            if is_percent_change_model:
+                # Den forudsagte procentvise ændring skal konverteres tilbage til en pris
+                # Bemærk: Hvis vi forecastet mange dage frem, skal vi bruge den korrekte basispris
+                horizon_days = int(h.replace('d', ''))
+                
+                # Juster vektorer for at matche længder (vi kan kun bruge fælles datapunkter)
+                min_len = min(len(y_pred_denorm), len(test_prices) - horizon_days)
+                
+                # Oprette arrays til de konverterede priser
+                actual_prices = np.zeros(min_len)
+                predicted_prices = np.zeros(min_len)
+                
+                for j in range(min_len):
+                    # For de faktiske værdier bruger vi fremtidige priser
+                    actual_prices[j] = test_prices[j + horizon_days]
+                    
+                    # For de forudsagte værdier anvender vi den procentvise ændring på nuværende pris
+                    base_price = test_prices[j]
+                    percent_change = y_pred_denorm[j][0]  # Forudsagt procentændring
+                    predicted_prices[j] = base_price * (1 + percent_change/100)
+                
+                # Erstat de denormaliserede værdier med faktiske prisværdier
+                y_pred_denorm = predicted_prices.reshape(-1, 1)
+                y_true_denorm = actual_prices.reshape(-1, 1)
+                
+                logging.info(f"Konverteret {h}-horisont tilbage til priser: Basis mean={np.mean(test_prices[:min_len]):.2f}, Forecast mean={np.mean(predicted_prices):.2f}")
+            # --- SLUT PÅ NY KODE ---
+        else:
+            # If no scaler, use as is
+            y_pred_denorm = y_pred
+            y_true_denorm = y_true
+            
+        # Calculate metrics
+        mse = mean_squared_error(y_true_denorm, y_pred_denorm)
         rmse = np.sqrt(mse)
-        r2 = r2_score(y_true_inv, y_pred_inv)
+        mae = mean_absolute_error(y_true_denorm, y_pred_denorm)
         
-        # Gem resultater
-        results[horizon] = {
-            'mae': mae,
+        # Avoid division by zero in MAPE calculation
+        mape = np.mean(np.abs((y_true_denorm - y_pred_denorm) / np.maximum(0.0001, np.abs(y_true_denorm)))) * 100
+        
+        # R² score
+        r2 = r2_score(y_true_denorm, y_pred_denorm)
+        
+        # Log results
+        logging.info(f"Metrics for {h} horizon:")
+        logging.info(f"  RMSE: {rmse:.4f}")
+        logging.info(f"  MAE: {mae:.4f}")
+        logging.info(f"  MAPE: {mape:.2f}%")
+        logging.info(f"  R²: {r2:.4f}")
+        
+        evaluation_results[h] = {
             'mse': mse,
             'rmse': rmse,
-            'r2': r2
+            'mae': mae,
+            'r2': r2,
+            'mape': mape
         }
         
-        logging.info(f"Horisont {horizon} - MAE: {mae:.4f}, RMSE: {rmse:.4f}, R²: {r2:.4f}")
-        
-        # Plot faktiske vs. forudsagte værdier
-        plt.figure(figsize=(10, 6))
-        plt.scatter(y_true_inv, y_pred_inv, alpha=0.5)
-        plt.plot([min(y_true_inv), max(y_true_inv)], [min(y_true_inv), max(y_true_inv)], 'r--')
-        plt.title(f'Faktiske vs. Forudsagte værdier - {horizon} horisont')
-        plt.xlabel('Faktiske værdier')
-        plt.ylabel('Forudsagte værdier')
-        
-        # Gem plot
-        plot_path = os.path.join(FIGURES_DIR, f'seq2seq_predictions_{horizon}.png')
-        plt.savefig(plot_path)
-        plt.close()
-        logging.info(f"Plot gemt som {plot_path}")
-    
-    return results
+    return evaluation_results
 
 def save_multi_horizon_model(model, feature_scaler, target_scalers, metrics, feature_names, target_columns, seq_length, history=None):
     """
-    Gem LSTM modellen, dens historie og metrikker
+    Gemmer LSTM modellen sammen med dens scaler og andre metadata.
     """
+    # Opret dato-timestamped path
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    model_path = MODELS_DIR / f"lstm_multi_horizon_model.keras"
+    meta_path = MODELS_DIR / f"lstm_model_metadata.json"
+    
+    # Gem modellen
     try:
-        # Opret mappe hvis den ikke eksisterer
-        MODELS_DIR.mkdir(parents=True, exist_ok=True)
-        FIGURES_DIR.mkdir(parents=True, exist_ok=True)
-        
-        # Gem model
-        model_path = MODELS_DIR / "lstm_multi_horizon_model.keras"
         model.save(model_path)
-        logging.info(f"Model saved to {model_path}")
-        
-        # Gem scaler og features
-        with open(MODELS_DIR / "lstm_feature_scaler.pkl", "wb") as f:
-            pickle.dump(feature_scaler, f)
-        
-        with open(MODELS_DIR / "lstm_target_scalers.pkl", "wb") as f:
-            pickle.dump(target_scalers, f)
-        
-        with open(MODELS_DIR / "lstm_feature_names.pkl", "wb") as f:
-            pickle.dump(feature_names, f)
-            
-        with open(MODELS_DIR / "lstm_target_columns.pkl", "wb") as f:
-            pickle.dump(target_columns, f)
-            
-        with open(MODELS_DIR / "lstm_seq_length.pkl", "wb") as f:
-            pickle.dump(seq_length, f)
-            
-        # Gem model arkitektur som tekstfil
-        model_summary = []
-        model.summary(print_fn=lambda x: model_summary.append(x))
-        with open(MODELS_DIR / "lstm_model_summary.txt", "w") as f:
-            f.write("\n".join(model_summary))
-            
-        # Gem metrics
-        with open(MODELS_DIR / "lstm_metrics.json", "w") as f:
-            json.dump(metrics, f, indent=4)
-            
-        # Gem og plotte træningshistorik
-        if history is not None:
-            history_dict = {
-                'loss': history.history['loss'],
-                'val_loss': history.history['val_loss']
-            }
-            
-            # Loss for each output
-            forecast_horizons = [1, 3, 7]
-            for i, h in enumerate(forecast_horizons):
-                output_name = f'day_{h}_output'
+        logging.info(f"Model gemt til {model_path}")
+    except Exception as e:
+        logging.error(f"Fejl ved gemning af model: {e}")
+        traceback.print_exc()
+    
+    # Gem scalers
+    joblib.dump(feature_scaler, MODELS_DIR / "lstm_feature_scaler.joblib")
+    joblib.dump(target_scalers, MODELS_DIR / "lstm_target_scalers.joblib")
+    
+    # Gem feature og target navne
+    joblib.dump(feature_names, MODELS_DIR / "lstm_feature_names.joblib")
+    joblib.dump(target_columns, MODELS_DIR / "lstm_target_columns.joblib")
+    
+    # Gem sequence length
+    joblib.dump(seq_length, MODELS_DIR / "lstm_sequence_length.joblib")
+    
+    # Gem feature medians til NaN-håndtering ved inference
+    try:
+        if isinstance(feature_names, list) and len(feature_names) > 0:
+            # Load original data to calculate medians
+            df = load_data()
+            if df is not None:
+                feature_medians = {}
+                for feature in feature_names:
+                    if feature in df.columns:
+                        feature_medians[feature] = float(df[feature].median())
                 
-                # Ekstraher output-specifik historik
-                if f'{output_name}_loss' in history.history:
-                    history_dict[f'day_{h}_loss'] = history.history[f'{output_name}_loss']
-                
-                # Håndter forskellige navneformater for validering loss
-                if f'{output_name}_val_loss' in history.history:
-                    history_dict[f'day_{h}_val_loss'] = history.history[f'{output_name}_val_loss']
-                elif f'val_{output_name}_loss' in history.history:
-                    history_dict[f'day_{h}_val_loss'] = history.history[f'val_{output_name}_loss']
-                
-            # Gem training history
-            with open(MODELS_DIR / "lstm_training_history.json", "w") as f:
-                json.dump(history_dict, f, indent=4)
-            
-        # Plot training history
+                # Gem medianer
+                if feature_medians:
+                    joblib.dump(feature_medians, MODELS_DIR / "lstm_feature_medians.joblib")
+                    logging.info(f"Feature medians gemt for {len(feature_medians)} features")
+    except Exception as e:
+        logging.error(f"Fejl ved gemning af feature medians: {e}")
+    
+    # Gem metadata som JSON
+    metadata = {
+        "model_type": "LSTM Multi-Horizon",
+        "created_at": timestamp,
+        "sequence_length": seq_length,
+        "feature_count": len(feature_names),
+        "target_columns": target_columns,
+        "metrics": metrics,
+        "is_percent_change_model": True  # Tilføjet for at markere at denne model bruger procentvise ændringer
+    }
+    
+    # Tilføj training history hvis tilgængelig
+    if history is not None and hasattr(history, 'history'):
+        # Konverter numpy arrays til lister for JSON serialisering
+        hist_dict = {}
+        for key, values in history.history.items():
+            if isinstance(values, np.ndarray):
+                hist_dict[key] = values.tolist()
+            else:
+                hist_dict[key] = list(values)
+        
+        metadata["training_history"] = hist_dict
+        
+        # Plot training history og gem som billede
+        try:
             plt.figure(figsize=(12, 8))
             
-            # Plot overall loss
-            plt.subplot(2, 2, 1)
-            plt.plot(history_dict['loss'], label='Training Loss')
-            plt.plot(history_dict['val_loss'], label='Validation Loss')
-            plt.title('Overall Model Loss')
-            plt.xlabel('Epoch')
+            # Plot loss
+            plt.subplot(2, 1, 1)
+            for key in history.history.keys():
+                if 'loss' in key and 'val' not in key:
+                    plt.plot(history.history[key], label=key)
+            for key in history.history.keys():
+                if 'loss' in key and 'val' in key:
+                    plt.plot(history.history[key], label=key, linestyle='--')
+            
+            plt.title('Model Loss During Training')
             plt.ylabel('Loss')
+            plt.xlabel('Epoch')
             plt.legend()
             
-            # Plot loss for each horizon
-            for i, h in enumerate(forecast_horizons):
-                if i < 3:  # vi har kun plads til tre subplots
-                    plt.subplot(2, 2, i+2)
-                    
-                    day_key = f'day_{h}_loss'
-                    day_val_key = f'day_{h}_val_loss'
-                    
-                    if day_key in history_dict:
-                        plt.plot(history_dict[day_key], 
-                                label=f'Training - Day {h}')
-                    
-                    if day_val_key in history_dict:
-                        plt.plot(history_dict[day_val_key], 
-                                label=f'Validation - Day {h}')
-                        
-                    plt.title(f'Loss for Day {h}')
-                    plt.xlabel('Epoch')
-                    plt.ylabel('Loss')
-                    plt.legend()
+            # Plot metrics (MAE)
+            plt.subplot(2, 1, 2)
+            for key in history.history.keys():
+                if 'mae' in key and 'val' not in key:
+                    plt.plot(history.history[key], label=key)
+            for key in history.history.keys():
+                if 'mae' in key and 'val' in key:
+                    plt.plot(history.history[key], label=key, linestyle='--')
+            
+            plt.title('Model MAE During Training')
+            plt.ylabel('MAE')
+            plt.xlabel('Epoch')
+            plt.legend()
             
             plt.tight_layout()
-            plt.savefig(FIGURES_DIR / "lstm_training_history.png")
-            
-        return True
-    except Exception as e:
-        logging.error(f"Error saving model artifacts: {e}")
-        return False
+            plt.savefig(FIGURES_DIR / f"training_history_{timestamp}.png")
+            plt.close()
+        except Exception as e:
+            logging.error(f"Fejl ved plotting af training history: {e}")
+    
+    # Gem metadata
+    with open(meta_path, 'w') as f:
+        json.dump(metadata, f, indent=2)
+    
+    logging.info(f"Model metadata gemt til {meta_path}")
+    
+    return model_path
 
 def train_seq2seq_model(X_train, y_train_dict, X_val, y_val_dict, 
                         seq_length=30, horizon_keys=['1d', '3d', '7d'], 
@@ -1118,11 +1191,19 @@ def main():
                 df_test[col] = df_test[col].clip(-1e10, 1e10)
                 
         # Skaler features
-        feature_scaler = StandardScaler()
+        feature_scaler = MinMaxScaler()
         X_train = feature_scaler.fit_transform(df_train[feature_columns])
         X_val = feature_scaler.transform(df_val[feature_columns])
         X_test = feature_scaler.transform(df_test[feature_columns])
         
+        # ---> BEREGN OG GEM MEDIANER FRA TRÆNINGSSÆTTET <---
+        logging.info("Calculating medians from training data...")
+        feature_medians = df_train[feature_columns].median().to_dict()
+        medians_path = MODELS_DIR / 'lstm_feature_medians.joblib'
+        joblib.dump(feature_medians, medians_path)
+        logging.info(f"Feature medians saved to {medians_path}")
+        # ---> FÆRDIG MED MEDIANER <---
+
         # Skaler targets (en scaler for hvert target)
         target_scalers = {}
         y_train_dict = {}
@@ -1130,7 +1211,7 @@ def main():
         y_test_dict = {}
         
         for target_col in target_columns:
-            scaler = StandardScaler()
+            scaler = MinMaxScaler()
             
             # Skaler hvert target
             y_train_dict[target_col] = scaler.fit_transform(df_train[[target_col]]).flatten()
@@ -1209,6 +1290,12 @@ def main():
         joblib.dump(seq_length, models_dir / 'lstm_sequence_length.joblib')
         logging.info("Sequence length gemt som 'lstm_sequence_length.joblib'")
         
+        # ---> GEM MEDIAN FILNAVN <---
+        # Gem feature medians (tilføjet her for konsistens)
+        joblib.dump(feature_medians, models_dir / 'lstm_feature_medians.joblib')
+        logging.info("Feature medians saved as 'lstm_feature_medians.joblib'")
+        # ---> FÆRDIG MED MEDIAN FILNAVN <---
+
         # Gem target kolonner
         joblib.dump(target_columns, models_dir / 'lstm_target_columns.joblib')
         logging.info("Target kolonner gemt som 'lstm_target_columns.joblib'")

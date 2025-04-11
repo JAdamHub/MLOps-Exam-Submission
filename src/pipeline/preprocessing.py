@@ -107,14 +107,15 @@ def preprocess_data(df: pd.DataFrame) -> tuple[pd.DataFrame | None, MinMaxScaler
         if not numerical_cols.empty:
             # Initializer scaler and fit it to the data
             scaler = MinMaxScaler()
-            scaled_data = scaler.fit_transform(df[numerical_cols])
-            
+            # scaled_data = scaler.fit_transform(df[numerical_cols]) # KOMMENTERET UD
+
             # Erstat kolonner i stedet for at bruge inplace=True
-            for i, col in enumerate(numerical_cols):
-                df[col] = scaled_data[:, i]
-                
-            logging.info(f"Scaled {len(numerical_cols)} numerical columns: {list(numerical_cols)}")
-            return df, scaler
+            # for i, col in enumerate(numerical_cols): # KOMMENTERET UD
+            #     df[col] = scaled_data[:, i] # KOMMENTERET UD
+
+            # logging.info(f"Scaled {len(numerical_cols)} numerical columns: {list(numerical_cols)}") # KOMMENTERET UD
+            logging.info(f"Skipping MinMaxScaler application, returning original numerical data.") # Tilføjet log
+            return df, scaler # Returnerer stadig scaler, men df er uskaleret
         else:
             logging.warning("No numerical columns found to scale.")
             scaler = None
