@@ -23,8 +23,8 @@ st.set_page_config(
 # Header
 st.title("Vestas Stock Dashboard 🌬️")
 st.markdown("""
-    Dette dashboard viser historiske Vestas-aktiepriser og forudsigelser for fremtidige priser.
-    Data opdateres dagligt, og forudsigelserne er baseret på maskinlæringsmodeller.
+    This dashboard displays historical Vestas stock prices and predictions for future prices.
+    Data is updated daily, and predictions are based on machine learning models.
 """)
 
 # Add a session state to store data between interactions
@@ -56,10 +56,10 @@ def get_price_history(days=365):
         response = requests.get(f"{API_URL}/price/history?days={days}", timeout=10)
         if response.status_code == 200:
             return response.json()['data']
-        st.error(f"Fejl ved hentning af prishistorik: {response.status_code} {response.reason}")
+        st.error(f"Error retrieving price history: {response.status_code} {response.reason}")
         return None
     except Exception as e:
-        st.error(f"Fejl ved forbindelse til API: {str(e)}")
+        st.error(f"Error connecting to API: {str(e)}")
         return None
 
 # Function to make predictions with LSTM model
@@ -72,10 +72,10 @@ def make_lstm_prediction(days_ahead=None):
         response = requests.post(url, timeout=10)
         if response.status_code == 200:
             return response.json()
-        st.error(f"Fejl ved udførelse af forudsigelse: {response.status_code} {response.reason}")
+        st.error(f"Error executing prediction: {response.status_code} {response.reason}")
         return None
     except Exception as e:
-        st.error(f"Fejl ved forbindelse til API: {str(e)}")
+        st.error(f"Error connecting to API: {str(e)}")
         return None
 
 # Function to plot price history
@@ -97,7 +97,7 @@ def plot_price_history(price_data):
         x=df['date'],
         y=df['price'],
         mode='lines',
-        name='Vestas-aktiekurs (DKK)',
+        name='Vestas stock price (EUR)',
         line=dict(color='#00573F', width=2),  # Vestas green
         fill='tozeroy',
         fillcolor='rgba(0, 87, 63, 0.1)'
@@ -108,7 +108,7 @@ def plot_price_history(price_data):
         x=df['date'],
         y=df['sma_7'],
         mode='lines',
-        name='7-dages glidende gns.',
+        name='7-day moving avg.',
         line=dict(color='#2196F3', width=1.5, dash='dot')
     ))
     
@@ -118,7 +118,7 @@ def plot_price_history(price_data):
             x=df['date'],
             y=df['sma_30'],
             mode='lines',
-            name='30-dages glidende gns.',
+            name='30-day moving avg.',
             line=dict(color='#4CAF50', width=1.5)
         ))
     
@@ -127,16 +127,16 @@ def plot_price_history(price_data):
         fig.add_trace(go.Bar(
             x=df['date'],
             y=df['volume'],
-            name='Handelsvolumen',
+            name='Trading volume',
             marker=dict(color='rgba(158, 158, 158, 0.3)'),
             yaxis='y2'
         ))
     
     # Layout configuration
     fig.update_layout(
-        title='Vestas-aktiekurs Historik 📊',
-        xaxis_title='Dato',
-        yaxis_title='Pris (DKK)',
+        title='Vestas Stock Price History 📊',
+        xaxis_title='Date',
+        yaxis_title='Price (EUR)',
         hovermode='x unified',
         legend=dict(
             orientation="h",
@@ -151,7 +151,7 @@ def plot_price_history(price_data):
             gridcolor='rgba(240, 240, 240, 0.5)'
         ),
         yaxis2=dict(
-            title='Volumen',
+            title='Volume',
             side='right',
             overlaying='y',
             showgrid=False
@@ -195,13 +195,13 @@ def plot_predictions(price_data, prediction_data):
     for horizon, pred_info in predictions.items():
         future_dates.append(pd.to_datetime(pred_info['prediction_date']))
         future_prices.append(pred_info['predicted_price'])
-        horizon_labels.append(f"{pred_info['horizon_days']} dage")
+        horizon_labels.append(f"{pred_info['horizon_days']} days")
     
     # Create DataFrame for plotting
     pred_df = pd.DataFrame({
         'date': [latest_date] + future_dates,
         'price': [latest_price] + future_prices,
-        'label': ['Seneste'] + horizon_labels
+        'label': ['Latest'] + horizon_labels
     })
     
     # Sort by date
@@ -221,7 +221,7 @@ def plot_predictions(price_data, prediction_data):
         fill='toself',
         fillcolor='rgba(0, 87, 63, 0.2)',
         line=dict(color='rgba(0, 87, 63, 0)'),
-        name='Prognoseinterval'
+        name='Forecast interval'
     ))
     
     # Add historical prices
@@ -229,7 +229,7 @@ def plot_predictions(price_data, prediction_data):
         x=df['date'],
         y=df['price'],
         mode='lines',
-        name='Historisk pris',
+        name='Historical price',
         line=dict(color='#00573F', width=2)
     ))
     
@@ -238,7 +238,7 @@ def plot_predictions(price_data, prediction_data):
         x=pred_df['date'],
         y=pred_df['price'],
         mode='lines+markers',
-        name='Forudsigelser',
+        name='Predictions',
         line=dict(color='#4CAF50', width=2, dash='dash'),
         marker=dict(size=8, symbol='circle')
     ))
@@ -248,7 +248,7 @@ def plot_predictions(price_data, prediction_data):
         x=[latest_date],
         y=[latest_price],
         mode='markers',
-        name='Seneste pris',
+        name='Latest price',
         marker=dict(color='#F44336', size=10, symbol='circle')
     ))
     
@@ -258,7 +258,7 @@ def plot_predictions(price_data, prediction_data):
             fig.add_annotation(
                 x=row['date'],
                 y=row['price'],
-                text=f"{row['price']:.2f} DKK",
+                text=f"{row['price']:.2f} EUR",
                 showarrow=True,
                 arrowhead=2,
                 arrowsize=1,
@@ -270,9 +270,9 @@ def plot_predictions(price_data, prediction_data):
     
     # Layout configuration
     fig.update_layout(
-        title='Vestas-aktiekurs Forudsigelser 🔮',
-        xaxis_title='Dato',
-        yaxis_title='Pris (DKK)',
+        title='Vestas Stock Price Predictions 🔮',
+        xaxis_title='Date',
+        yaxis_title='Price (EUR)',
         hovermode='x unified',
         legend=dict(
             orientation="h",
@@ -288,7 +288,7 @@ def plot_predictions(price_data, prediction_data):
     
     # Add note about uncertainty of predictions
     fig.add_annotation(
-        text="Bemærk: Konfidensintervallet er illustrativt og afspejler ikke faktisk modelusikkerhed",
+        text="Note: The confidence interval is illustrative and does not reflect actual model uncertainty",
         x=0.5,
         y=0,
         xref="paper",
@@ -327,15 +327,15 @@ def plot_volatility(price_data, window=14):
         x=df['date'],
         y=df['volatility'],
         mode='lines',
-        name=f'{window}-dages volatilitet',
+        name=f'{window}-day volatility',
         line=dict(color='#9C27B0', width=2)
     ))
     
     # Layout configuration
     fig.update_layout(
-        title=f'Vestas {window}-dages Volatilitet 📉',
-        xaxis_title='Dato',
-        yaxis_title='Volatilitet (%)',
+        title=f'Vestas {window}-day Volatility 📉',
+        xaxis_title='Date',
+        yaxis_title='Volatility (%)',
         hovermode='x unified',
         template='plotly_white'
     )
@@ -344,15 +344,15 @@ def plot_volatility(price_data, window=14):
 
 # Sidebar navigation
 st.sidebar.title("Navigation 🧭")
-page = st.sidebar.radio("Vælg side", ["Dashboard", "Forudsigelser"])
+page = st.sidebar.radio("Select page", ["Dashboard", "Predictions"])
 
 # API status check
-with st.sidebar.expander("API-Status 🔌", expanded=False):
+with st.sidebar.expander("API Status 🔌", expanded=False):
     health_status = check_api_health()
     if health_status["status"] == "healthy":
-        st.sidebar.success("API er online og fungerer")
+        st.sidebar.success("API is online and functioning")
     else:
-        st.sidebar.error(f"API er offline eller har problemer: {health_status.get('error', '')}")
+        st.sidebar.error(f"API is offline or has issues: {health_status.get('error', '')}")
     
     st.sidebar.text(f"API URL: {API_URL}")
     for key, value in health_status.items():
@@ -360,14 +360,14 @@ with st.sidebar.expander("API-Status 🔌", expanded=False):
             st.sidebar.text(f"{key}: {value}")
 
 # Update data button
-if st.sidebar.button("Opdater data 🔄"):
-    with st.spinner("Henter data..."):
+if st.sidebar.button("Update data 🔄"):
+    with st.spinner("Fetching data..."):
         st.session_state.price_history = get_price_history()
-        st.success("Data opdateret!")
+        st.success("Data updated!")
 
 # Select time period
 days_to_show = st.sidebar.slider(
-    "Antal dage der skal vises", 
+    "Number of days to display", 
     min_value=7, 
     max_value=365, 
     value=90, 
@@ -376,13 +376,13 @@ days_to_show = st.sidebar.slider(
 
 # Load data if not already loaded
 if st.session_state.price_history is None:
-    with st.spinner("Henter prishistorik..."):
+    with st.spinner("Fetching price history..."):
         st.session_state.price_history = get_price_history()
 
 # Dashboard page
 if page == "Dashboard":
     # Display dashboard content
-    st.header("Vestas-aktiekurs Oversigt 💰")
+    st.header("Vestas Stock Price Overview 💰")
     
     # Display price data, if available
     if st.session_state.price_history:
@@ -397,46 +397,46 @@ if page == "Dashboard":
         col1, col2, col3, col4 = st.columns(4)
         with col1:
             latest_price = df['price'].iloc[-1]
-            st.metric("Seneste pris", f"{latest_price:.2f} DKK")
+            st.metric("Latest price", f"{latest_price:.2f} EUR")
         
         with col2:
             price_change = df['price'].iloc[-1] - df['price'].iloc[0]
             price_change_pct = (price_change / df['price'].iloc[0]) * 100
-            st.metric("Ændring", f"{price_change:.2f} DKK", f"{price_change_pct:.2f}%")
+            st.metric("Change", f"{price_change:.2f} EUR", f"{price_change_pct:.2f}%")
         
         with col3:
             high_price = df['price'].max()
-            st.metric("Højeste pris", f"{high_price:.2f} DKK")
+            st.metric("Highest price", f"{high_price:.2f} EUR")
         
         with col4:
             low_price = df['price'].min()
-            st.metric("Laveste pris", f"{low_price:.2f} DKK")
+            st.metric("Lowest price", f"{low_price:.2f} EUR")
         
         # Add more metrics
-        st.subheader("Markedsstatistik 📊")
+        st.subheader("Market Statistics 📊")
         col1, col2 = st.columns(2)
         
         with col1:
             avg_price = df['price'].mean()
-            st.metric("Gennemsnitlig pris", f"{avg_price:.2f} DKK")
+            st.metric("Average price", f"{avg_price:.2f} EUR")
             
             if 'volume' in df.columns and df['volume'].notna().any():
                 latest_volume = df['volume'].iloc[-1]
-                st.metric("Handelsvolumen", f"{latest_volume:,.0f}")
+                st.metric("Trading volume", f"{latest_volume:,.0f}")
         
         with col2:
             # 30-day return
             if len(df) >= 30:
                 return_30d = (df['price'].iloc[-1] / df['price'].iloc[-min(30, len(df))] - 1) * 100
-                st.metric("30-dages afkast", f"{return_30d:.2f}%", delta_color="normal" if return_30d >= 0 else "inverse")
+                st.metric("30-day return", f"{return_30d:.2f}%", delta_color="normal" if return_30d >= 0 else "inverse")
             
             # Calculate volatility (last 14 days)
             if len(df) >= 14:
                 volatility = df['price'].pct_change().rolling(14).std().iloc[-1] * 100
-                st.metric("14-dages volatilitet", f"{volatility:.2f}%")
+                st.metric("14-day volatility", f"{volatility:.2f}%")
         
         # Display tabs with different graphs
-        tab1, tab2 = st.tabs(["Prisudvikling", "Volatilitet"])
+        tab1, tab2 = st.tabs(["Price Development", "Volatility"])
         
         with tab1:
             # Display price graph
@@ -444,7 +444,7 @@ if page == "Dashboard":
             if price_chart:
                 st.plotly_chart(price_chart, use_container_width=True)
             else:
-                st.error("Kunne ikke generere prisdiagram.")
+                st.error("Could not generate price chart.")
         
         with tab2:
             # Display volatility graph
@@ -452,43 +452,43 @@ if page == "Dashboard":
             if volatility_chart:
                 st.plotly_chart(volatility_chart, use_container_width=True)
             else:
-                st.error("Kunne ikke generere volatilitetsdiagram.")
+                st.error("Could not generate volatility chart.")
     else:
-        st.warning("Ingen prisdata tilgængelige. Prøv at opdatere data via knappen i sidepanelet.")
+        st.warning("No price data available. Try updating data via the button in the sidebar.")
 
 # Predictions page
-elif page == "Forudsigelser":
-    st.header("Vestas-aktiekurs Forudsigelser 🔮")
+elif page == "Predictions":
+    st.header("Vestas Stock Price Predictions 🔮")
     
     # Display info about predictions
     st.info("""
-    **Bemærk**: Forudsigelserne er baseret på den seneste Vestas-aktiekursdata kombineret med en LSTM-model.
-    Resultaterne bør fortolkes med forsigtighed og ikke som investeringsrådgivning.
+    **Note**: The predictions are based on the latest Vestas stock price data combined with an LSTM model.
+    Results should be interpreted with caution and not as investment advice.
     """)
     
     if st.session_state.price_history:
-        st.subheader("Forudsigelser baseret på seneste data ✨")
+        st.subheader("Predictions based on latest data ✨")
         
         # UI for horizons
         col1, col2 = st.columns([1, 2])
         with col1:
             horizon_choice = st.radio(
-                "Vælg forudsigelseshorisont",
-                options=["Alle horisonter", "1 dag", "3 dage", "7 dage"]
+                "Select prediction horizon",
+                options=["All horizons", "1 day", "3 days", "7 days"]
             )
             
             # Convert choice to days_ahead parameter
             days_ahead = None
-            if horizon_choice == "1 dag":
+            if horizon_choice == "1 day":
                 days_ahead = 1
-            elif horizon_choice == "3 dage":
+            elif horizon_choice == "3 days":
                 days_ahead = 3
-            elif horizon_choice == "7 dage":
+            elif horizon_choice == "7 days":
                 days_ahead = 7
         
         # Make prediction
-        if st.button("Lav forudsigelse 🚀"):
-            with st.spinner("Laver forudsigelse..."):
+        if st.button("Make prediction 🚀"):
+            with st.spinner("Making prediction..."):
                 st.session_state.latest_prediction = make_lstm_prediction(days_ahead)
         
         # Display prediction, if available
@@ -501,7 +501,7 @@ elif page == "Forudsigelser":
             
             # Display current price
             with cols[0]:
-                st.metric("Nuværende pris", f"{current_price:.2f} DKK")
+                st.metric("Current price", f"{current_price:.2f} EUR")
             
             # Display predictions for each horizon
             for i, (horizon, pred_info) in enumerate(sorted(predictions.items(), key=lambda x: int(x[0]))):
@@ -510,10 +510,10 @@ elif page == "Forudsigelser":
                     change = price - current_price
                     change_pct = (change / current_price) * 100
                     days = pred_info['horizon_days']
-                    horizon_display = f"{days} dag{'e' if days > 1 else ''}"
+                    horizon_display = f"{days} day{'s' if days > 1 else ''}"
                     st.metric(
                         horizon_display,
-                        f"{price:.2f} DKK",
+                        f"{price:.2f} EUR",
                         f"{change_pct:+.2f}%",
                         delta_color="normal" if change >= 0 else "inverse"
                     )
@@ -526,14 +526,14 @@ elif page == "Forudsigelser":
             if prediction_chart:
                 st.plotly_chart(prediction_chart, use_container_width=True)
             else:
-                st.error("Kunne ikke generere forudsigelsesdiagram.")
+                st.error("Could not generate prediction chart.")
             
             # Display model type
             st.caption(f"Model: {st.session_state.latest_prediction.get('model_type', 'LSTM')}")
         else:
-            st.info("Klik på 'Lav forudsigelse' for at få forudsigelser for de kommende dage.")
+            st.info("Click on 'Make prediction' to get predictions for the coming days.")
     else:
-        st.warning("Ingen prisdata tilgængelige. Prøv at opdatere data via knappen i sidepanelet.")
+        st.warning("No price data available. Try updating data via the button in the sidebar.")
 
 # Footer
 st.sidebar.markdown("---")
