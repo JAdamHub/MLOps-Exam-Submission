@@ -187,18 +187,20 @@ def plot_predictions(price_data, prediction_data):
     df = pd.DataFrame(price_data)
     df['date'] = pd.to_datetime(df['date'])
     
-    # Get the latest date and price
-    latest_date = pd.to_datetime(prediction_data.get('last_price_date', df['date'].max()))
-    latest_price = prediction_data.get('last_price', df['price'].iloc[-1])
+    # Get the latest date and price - use the very last date from our price data to ensure accuracy
+    # This ensures the red dot will be placed exactly at the end of the historical line
+    latest_date = df['date'].max()
+    latest_price = df['price'].iloc[-1]
     
-    # Make sure latest_date is a valid trading day
-    # If last_price_date is not in our data, use the latest date from price_data
-    if latest_date not in df['date'].values:
-        # Find closest date from our price data that's before or equal to latest_date
-        closest_date = df[df['date'] <= latest_date]['date'].max()
-        if pd.notna(closest_date):
-            logger.info(f"Corrected latest date from {latest_date} to nearest trading day {closest_date}")
-            latest_date = closest_date
+    # If API provides a different last price date, log it but prefer our actual data for visualization
+    api_last_date = prediction_data.get('last_price_date')
+    if api_last_date:
+        api_last_date = pd.to_datetime(api_last_date)
+        logger.info(f"API last price date: {api_last_date}, using our actual last date: {latest_date}")
+    
+    # If API provides last price, use it, otherwise use our last price
+    if 'last_price' in prediction_data:
+        latest_price = prediction_data.get('last_price')
     
     # Create prediction points
     predictions = prediction_data['vestas_predictions']
@@ -206,13 +208,33 @@ def plot_predictions(price_data, prediction_data):
     future_prices = []
     horizon_labels = []
     
+    # Get the date difference to adjust future dates
+    reference_date = latest_date
+    
     for horizon, pred_info in predictions.items():
-        future_dates.append(pd.to_datetime(pred_info['prediction_date']))
+        # Calculate the correct future date based on horizon and trading days
+        days_ahead = pred_info['horizon_days']
+        api_date = pd.to_datetime(pred_info['prediction_date'])
+        
+        # Calculate correct future date - ensuring we add exactly the right number of days
+        # from our reference date rather than using the API's date
+        from pandas.tseries.offsets import BusinessDay
+        if 'trading_days' in pred_info:
+            # If using trading days, add that many business days
+            future_date = reference_date + BusinessDay(days_ahead)
+        else:
+            # If using calendar days, add that many calendar days
+            future_date = reference_date + pd.Timedelta(days=days_ahead)
+        
+        logger.info(f"Horizon {days_ahead}: API date: {api_date}, Adjusted date: {future_date}")
+        
+        future_dates.append(future_date)
         future_prices.append(pred_info['predicted_price'])
+        
         # Update label to specify these are trading days
         is_trading_days = 'trading_days' in pred_info
         days_text = "trading days" if is_trading_days else "days"
-        horizon_labels.append(f"{pred_info['horizon_days']} {days_text}")
+        horizon_labels.append(f"{days_ahead} {days_text}")
     
     # Create DataFrame for plotting
     pred_df = pd.DataFrame({
@@ -474,7 +496,7 @@ if page == "Dashboard":
         st.warning("No price data available. Try updating data via the button in the sidebar.")
 
 # Predictions page
-elif page == "Forudsigelser":
+elif page == "Predictions":
     st.header("Vestas Stock Price Predictions 🔮")
     
     # Display info about predictions
