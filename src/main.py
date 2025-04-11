@@ -5,7 +5,7 @@ from pathlib import Path
 import sys
 sys.path.append(str(Path(__file__).resolve().parent))
 from monitoring.scheduler import ModelUpdateScheduler
-from visualization.model_metrics_viz import main as generate_visualizations
+from pipelinevizoptions.src.pipelinevizoptions.model_metrics_viz import main as generate_visualizations
 
 # Konfigurer logging
 logging.basicConfig(
