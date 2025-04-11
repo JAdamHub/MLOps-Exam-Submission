@@ -20,7 +20,7 @@ import pickle
 import os
 from tensorflow.keras import backend as K
 
-# Konfigurer logging
+# Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # --- Configuration ---
@@ -30,12 +30,12 @@ MODELS_DIR = PROJECT_ROOT / "models"
 FIGURES_DIR = MODELS_DIR / "figures"
 
 # Forecast horizons
-FORECAST_HORIZONS = [1, 3, 7]  # Forudsig prisen 1, 3 og 7 dage frem
+FORECAST_HORIZONS = [1, 3, 7]  # Predict the price 1, 3, and 7 days ahead
 
-# LSTM-specifikke parametre
-SEQUENCE_LENGTH = 10  # Antal dage at bruge som input sekvens
-BATCH_SIZE = 8  # Mindre batch size for bedre generalisering
-NUM_EPOCHS = 200  # Flere epochs med early stopping
+# LSTM-specific parameters
+SEQUENCE_LENGTH = 10  # Number of days to use as input sequence
+BATCH_SIZE = 8  # Smaller batch size for better generalization
+NUM_EPOCHS = 200  # More epochs with early stopping
 
 # Ensure directories exist
 MODELS_DIR.mkdir(parents=True, exist_ok=True)
@@ -57,15 +57,15 @@ def prepare_data(df):
     # Remove timestamp and ID columns
     df = df.copy()
     
-    # Tjek om indekset indeholder datoer og sørg for at den ikke bliver en feature
+    # Check if the index contains dates and ensure it doesn't become a feature
     if isinstance(df.index, pd.DatetimeIndex) or df.index.name == 'date':
-        logging.info("DataFrame har DatetimeIndex - gemmer indeks separat fra features")
-        # Konverter indeks til en separat kolonne, hvis det er nødvendigt
+        logging.info("DataFrame has DatetimeIndex - saving index separately from features")
+        # Convert index to a separate column if necessary
         if not isinstance(df.index, pd.DatetimeIndex):
             df.index = pd.to_datetime(df.index)
-        # Behold indekset
+        # Keep the index
     elif 'date' in df.columns:
-        logging.info("Konverterer 'date' kolonne til indeks")
+        logging.info("Converting 'date' column to index")
         df['date'] = pd.to_datetime(df['date'])
         df.set_index('date', inplace=True)
     
@@ -88,7 +88,7 @@ def prepare_data(df):
             median_val = df[col].median()
             df[col] = df[col].fillna(median_val)
     
-    # Identificer target kolonner baseret på navne
+    # Identify target columns based on names
     target_columns = [f'price_target_{horizon}d' for horizon in FORECAST_HORIZONS]
     missing_targets = [col for col in target_columns if col not in df.columns]
     
@@ -99,7 +99,7 @@ def prepare_data(df):
     # Separate features and targets
     feature_columns = [col for col in df.columns if col not in target_columns]
     
-    # Fjern ikke-numeriske kolonner fra feature_columns
+    # Remove non-numeric columns from feature_columns
     numeric_feature_columns = []
     for col in feature_columns:
         # Check if column is numeric
@@ -111,32 +111,32 @@ def prepare_data(df):
     logging.info(f"Using {len(numeric_feature_columns)} numeric features out of {len(feature_columns)} total features")
     feature_columns = numeric_feature_columns
     
-    # Håndter uendelige værdier og ekstreme tal
+    # Handle infinite values and extreme numbers
     for col in feature_columns:
-        # Erstat inf og -inf med NaN
+        # Replace inf and -inf with NaN
         df[col] = df[col].replace([np.inf, -np.inf], np.nan)
         
-        # Erstat NaN med median
+        # Replace NaN with median
         median_val = df[col].median()
         df[col] = df[col].fillna(median_val)
     
-    # Log kolonner med ekstreme værdier
+    # Log columns with extreme values
     for col in feature_columns:
         min_val = df[col].min()
         max_val = df[col].max()
         if max_val > 1e10 or min_val < -1e10:
-            logging.warning(f"Feature {col} har ekstreme værdier: min={min_val}, max={max_val}")
+            logging.warning(f"Feature {col} has extreme values: min={min_val}, max={max_val}")
             
-            # Begræns ekstreme værdier
+            # Limit extreme values
             df[col] = df[col].clip(-1e10, 1e10)
     
-    # --- NY KODE: Konverter target til procentvis ændring ---
-    # Gem de oprindelige målværdier til senere konvertering tilbage
+    # --- NEW CODE: Convert target to percentage change ---
+    # Save the original target values for later conversion back
     original_target_values = {}
     for target_col in target_columns:
         original_target_values[target_col] = df[target_col].values.copy()
     
-    # Find 'Close' eller lignende kolonne for den aktuelle pris
+    # Find 'Close' or similar column for the current price
     price_column = None
     for candidate in ['Close', 'close', 'price', 'Price']:
         if candidate in df.columns:
@@ -144,33 +144,33 @@ def prepare_data(df):
             break
     
     if price_column is None:
-        raise ValueError("Kunne ikke finde priskolonne i dataframen (Close, close, price, Price)")
+        raise ValueError("Could not find price column in the dataframe (Close, close, price, Price)")
     
-    # Konverter targets til procentvise ændringer
+    # Convert targets to percentage changes
     for target_col in target_columns:
         horizon = int(target_col.split('_')[-1].replace('d', ''))
-        # Beregn procentvis ændring fra nuværende pris til target pris
+        # Calculate percentage change from current price to target price
         df[f'pct_change_{target_col}'] = ((df[target_col] / df[price_column]) - 1) * 100
-        logging.info(f"Konverteret {target_col} til procent ændring: Middel = {df[f'pct_change_{target_col}'].mean():.2f}%, Std = {df[f'pct_change_{target_col}'].std():.2f}%")
+        logging.info(f"Converted {target_col} to percent change: Mean = {df[f'pct_change_{target_col}'].mean():.2f}%, Std = {df[f'pct_change_{target_col}'].std():.2f}%")
     
-    # Opdater target_columns til at bruge de nye procentvise kolonner
+    # Update target_columns to use the new percentage columns
     percent_target_columns = [f'pct_change_{col}' for col in target_columns]
-    logging.info(f"Nye target kolonner med procentvise ændringer: {percent_target_columns}")
-    # --- SLUT PÅ NY KODE ---
+    logging.info(f"New target columns with percentage changes: {percent_target_columns}")
+    # --- END OF NEW CODE ---
     
     X = df[feature_columns].values
     
     # Create dictionary of targets for different horizons
     y_dict = {}
     for i, target_col in enumerate(target_columns):
-        # Brug den procentvise ændring som target
+        # Use the percentage change as target
         y_dict[target_col] = df[percent_target_columns[i]].values
     
-    # Scale features using MinMaxScaler (bedre for LSTM end StandardScaler)
+    # Scale features using MinMaxScaler (better for LSTM than StandardScaler)
     feature_scaler = MinMaxScaler()
     X_scaled = feature_scaler.fit_transform(X)
     
-    # Scale targets (vigtigt for LSTM)
+    # Scale targets (important for LSTM)
     target_scalers = {}
     for target_col in target_columns:
         target_scaler = MinMaxScaler()
@@ -179,7 +179,7 @@ def prepare_data(df):
         target_scalers[target_col] = target_scaler
     
     # Split data into training (64%), validation (16%), and test (20%) sets
-    # Dette følger inspirationsmodellens approach
+    # This follows the approach of the inspiration model
     train_size = int(len(X_scaled) * 0.8)
     train_val_data = X_scaled[:train_size]
     test_data = X_scaled[train_size:]
@@ -188,7 +188,7 @@ def prepare_data(df):
     train_data = train_val_data[:train_val_size]
     val_data = train_val_data[train_val_size:]
     
-    # Split targets med samme indekser
+    # Split targets with same indices
     y_train = {}
     y_val = {}
     y_test = {}
@@ -208,7 +208,7 @@ def prepare_data(df):
         'test': (test_data, y_test)
     }
     
-    # Gem de oprindelige prisværdier for at kunne konvertere tilbage
+    # Save the original price values to be able to convert back
     data_splits['original_prices'] = {
         'price_column': price_column,
         'last_price_train': df[price_column].iloc[train_val_size-1],
@@ -221,16 +221,16 @@ def prepare_data(df):
 
 def create_sequences(data, target_dict=None, seq_length=10):
     """
-    Opret sekventielle data til seq2seq LSTM modellen.
+    Create sequential data for the seq2seq LSTM model.
     
     Args:
-        data: DataFrame eller numpy array med input features
-        target_dict: Dictionary med targets for hver tidshorisont
-        seq_length: Længde af input sekvensen
+        data: DataFrame or numpy array with input features
+        target_dict: Dictionary with targets for each time horizon
+        seq_length: Length of the input sequence
     
     Returns:
-        X_seq: 3D numpy array med sekventielle input data [samples, seq_length, features]
-        y_seq_dict: Dictionary med 2D numpy arrays for hver tidshorisont
+        X_seq: 3D numpy array with sequential input data [samples, seq_length, features]
+        y_seq_dict: Dictionary with 2D numpy arrays for each time horizon
     """
     if isinstance(data, pd.DataFrame):
         data = data.values
@@ -238,15 +238,15 @@ def create_sequences(data, target_dict=None, seq_length=10):
     n_samples = data.shape[0] - seq_length
     
     if n_samples <= 0:
-        raise ValueError(f"Seq_length {seq_length} er længere end data med {data.shape[0]} samples!")
+        raise ValueError(f"Seq_length {seq_length} is longer than data with {data.shape[0]} samples!")
     
-    # Opret input sekvenser (X)
+    # Create input sequences (X)
     X_seq = np.zeros((n_samples, seq_length, data.shape[1]))
     
     for i in range(n_samples):
         X_seq[i] = data[i:i+seq_length]
     
-    # Opret target sekvenser (y) hvis target_dict er givet
+    # Create target sequences (y) if target_dict is provided
     if target_dict is not None:
         y_seq_dict = {}
         
@@ -258,12 +258,12 @@ def create_sequences(data, target_dict=None, seq_length=10):
             if target.ndim == 1:
                 target = target.reshape(-1, 1)
                 
-            # Følg samme struktur som input sekvenserne
-            y_seq = np.zeros((n_samples, 1))  # 1-dimensional output for hver horisont
+            # Follow the same structure as the input sequences
+            y_seq = np.zeros((n_samples, 1))  # 1-dimensional output for each horizon
             
             for i in range(n_samples):
-                # Target er den værdi der kommer efter sekvensen
-                # for den pågældende horisont
+                # Target is the value that comes after the sequence
+                # for the corresponding horizon
                 y_seq[i] = target[i+seq_length-1]
                 
             y_seq_dict[horizon] = y_seq
@@ -274,63 +274,63 @@ def create_sequences(data, target_dict=None, seq_length=10):
 
 def build_multi_horizon_lstm_model(input_shape, output_dim=1):
     """
-    Bygger en LSTM model til forudsigelse af flere tidshorisonter.
+    Builds an LSTM model for predicting multiple time horizons.
     
     Args:
-        input_shape: Tuple med (seq_length, n_features)
-        output_dim: Antal outputs (typisk 1 for hver tidshorisont)
+        input_shape: Tuple with (seq_length, n_features)
+        output_dim: Number of outputs (typically 1 for each time horizon)
         
     Returns:
-        Kompileret Keras model
+        Compiled Keras model
     """
-    # Input lag
+    # Input layer
     input_layer = Input(shape=input_shape)
     
-    # LSTM lag med dropout for at undgå overfitting
+    # LSTM layers with dropout to avoid overfitting
     lstm1 = LSTM(64, return_sequences=True)(input_layer)
     dropout1 = Dropout(0.2)(lstm1)
     
     lstm2 = LSTM(32)(dropout1)
     dropout2 = Dropout(0.2)(lstm2)
     
-    # Output lag for hver tidshorisont
+    # Output layers for each time horizon
     outputs = []
     for h in ['1d', '3d', '7d']:
         dense = Dense(16, activation='relu')(dropout2)
         output = Dense(output_dim, name=f'output_{h}')(dense)
         outputs.append(output)
     
-    # Bygger model
+    # Build model
     model = Model(inputs=input_layer, outputs=outputs)
     
-    # Kompilerer model
+    # Compile model
     model.compile(
         optimizer=Adam(learning_rate=0.001),
         loss='mse',
         metrics=['mae']
     )
     
-    logging.info(f"Model bygget med input shape {input_shape} og {len(outputs)} outputs")
+    logging.info(f"Model built with input shape {input_shape} and {len(outputs)} outputs")
     return model
 
 def build_seq2seq_model(input_shape, horizon_keys=['1d', '3d', '7d']):
     """
-    Bygger en avanceret seq2seq model med encoder-decoder arkitektur til flere tidshorisonter.
-    Implementerer basal attention mekanisme for bedre forecasting.
+    Builds an advanced seq2seq model with encoder-decoder architecture for multiple time horizons.
+    Implements a basic attention mechanism for better forecasting.
     
     Args:
-        input_shape: Tuple med (seq_length, n_features)
-        horizon_keys: Liste med tidshorisonter der skal forudsiges
+        input_shape: Tuple with (seq_length, n_features)
+        horizon_keys: List of time horizons to predict
         
     Returns:
-        Kompileret Keras model
+        Compiled Keras model
     """
-    logging.info(f"Bygger avanceret seq2seq model med input shape {input_shape} og {len(horizon_keys)} horisonter")
+    logging.info(f"Building advanced seq2seq model with input shape {input_shape} and {len(horizon_keys)} horizons")
     
-    # Input lag
+    # Input layer
     encoder_inputs = Input(shape=input_shape, name='encoder_input')
     
-    # Encoder LSTM-lag
+    # Encoder LSTM layers
     encoder_lstm1 = Bidirectional(LSTM(128, return_sequences=True), name='encoder_bilstm')
     encoder_output1 = encoder_lstm1(encoder_inputs)
     encoder_output1 = Dropout(0.25)(encoder_output1)
@@ -338,28 +338,28 @@ def build_seq2seq_model(input_shape, horizon_keys=['1d', '3d', '7d']):
     encoder_lstm2 = LSTM(128, return_sequences=True, return_state=True, name='encoder_lstm')
     encoder_output2, state_h, state_c = encoder_lstm2(encoder_output1)
     
-    # Attention mekanisme
+    # Attention mechanism
     attention = Dense(1, activation='tanh')(encoder_output2)
     attention = Flatten()(attention)
     attention_weights = Activation('softmax')(attention)
     attention_weights = RepeatVector(128)(attention_weights)
     attention_weights = Permute([2, 1])(attention_weights)
     
-    # Anvend attention på encoder output
+    # Apply attention to encoder output
     context_vector = Multiply()([encoder_output2, attention_weights])
     context_vector = Lambda(lambda x: K.sum(x, axis=1))(context_vector)
     
-    # Gemmer encoder states til decoder initialisation
+    # Save encoder states for decoder initialization
     encoder_states = [state_h, state_c]
     
-    # Outputs for hver horisont
+    # Outputs for each horizon
     outputs = {}
     for h in horizon_keys:
-        # Decoder med attention
+        # Decoder with attention
         decoder_lstm = LSTM(128, name=f'decoder_lstm_{h}')
         decoder_output = decoder_lstm(RepeatVector(1)(context_vector), initial_state=encoder_states)
         
-        # Tætte lag for prognose
+        # Dense layers for prediction
         decoder_dense1 = Dense(64, activation='relu', name=f'decoder_dense1_{h}')
         decoder_dropout1 = Dropout(0.2)
         decoder_dense2 = Dense(32, activation='relu', name=f'decoder_dense2_{h}')
@@ -372,15 +372,15 @@ def build_seq2seq_model(input_shape, horizon_keys=['1d', '3d', '7d']):
         dense_out2 = decoder_dropout2(dense_out2)
         outputs[f'output_{h}'] = decoder_output_layer(dense_out2)
     
-    # Bygger model
+    # Build model
     model = Model(inputs=encoder_inputs, outputs=list(outputs.values()))
     
-    # Definerer loss function og metrics for hver output
+    # Define loss function and metrics for each output
     losses = {output_name: 'mse' for output_name in outputs.keys()}
     loss_weights = {output_name: 1.0 for output_name in outputs.keys()}
     metrics = {output_name: 'mae' for output_name in outputs.keys()}
     
-    # Kompilerer model
+    # Compile model
     model.compile(
         optimizer=Adam(learning_rate=0.001),
         loss=losses,
@@ -393,15 +393,15 @@ def build_seq2seq_model(input_shape, horizon_keys=['1d', '3d', '7d']):
 
 def create_sequences(data, seq_length):
     """
-    Genererer sekventielle input-output par for LSTM modellen.
+    Generates sequential input-output pairs for the LSTM model.
     
     Args:
-        data: DataFrame med features og targets
-        seq_length: Længde af input sekvenser
+        data: DataFrame with features and targets
+        seq_length: Length of input sequences
         
     Returns:
-        X: Array med input sekvenser [samples, seq_length, features]
-        y: Array med targets [samples, 1]
+        X: Array with input sequences [samples, seq_length, features]
+        y: Array with targets [samples, 1]
     """
     X, y = [], []
     for i in range(len(data) - seq_length):
@@ -412,54 +412,54 @@ def create_sequences(data, seq_length):
 
 def prepare_sequences_for_seq2seq(X_data, y_data_dict, seq_length, horizon_keys):
     """
-    Forbereder sekvenser af data til seq2seq modellen.
+    Prepares sequences of data for the seq2seq model.
     
     Args:
-        X_data: DataFrame med features
-        y_data_dict: Dictionary med targets for hver tidshorisont
-        seq_length: Længde af sekvenser
-        horizon_keys: Liste med nøgler for tidshorisonter
+        X_data: DataFrame with features
+        y_data_dict: Dictionary with targets for each time horizon
+        seq_length: Length of sequences
+        horizon_keys: List of keys for time horizons
         
     Returns:
-        X_sequences: Array med input sekvenser
-        y_sequences_dict: Dictionary med target sekvenser for hver tidshorisont
+        X_sequences: Array with input sequences
+        y_sequences_dict: Dictionary with target sequences for each time horizon
     """
-    # Opret tom liste til at gemme sekvenser
+    # Create empty list to store sequences
     sequences = []
     for i in range(len(X_data) - seq_length + 1):
         sequences.append(X_data.iloc[i:i+seq_length].values)
     
     X_sequences = np.array(sequences)
     
-    # Opret target dictionary
+    # Create target dictionary
     y_sequences_dict = {}
     for h in horizon_keys:
         if h in y_data_dict:
-            # Tag targets fra index seq_length-1 og frem for at matche X_sequences
+            # Take targets from index seq_length-1 and forward to match X_sequences
             y_seq = y_data_dict[h][seq_length-1:]
             y_sequences_dict[h] = np.array(y_seq)
     
-    # Log information om data shapes
-    logging.info(f"Sekvensdata forberedt: X shape: {X_sequences.shape}, " + 
+    # Log information about data shapes
+    logging.info(f"Sequence data prepared: X shape: {X_sequences.shape}, " + 
                f"target shapes: {', '.join([f'{k}: {v.shape}' for k, v in y_sequences_dict.items()])}")
     
     return X_sequences, y_sequences_dict
 
 def hyperparameter_tuning(data_splits, target_col):
     """
-    Kører en simpel hyperparameter tuning for LSTM modellen.
+    Runs a simple hyperparameter tuning for the LSTM model.
     """
     logging.info("Starting hyperparameter tuning for LSTM...")
     
-    # Hent data
+    # Get data
     train_data, y_train = data_splits['train']
     val_data, y_val = data_splits['val']
     
-    # Target for 1-dags horisont
+    # Target for 1-day horizon
     y_train_target = y_train[target_col]
     y_val_target = y_val[target_col]
     
-    # Opret sekvenser til LSTM
+    # Create sequences for LSTM
     X_train_seq, y_train_seq = create_sequences(train_data, y_train_target)
     X_val_seq, y_val_seq = create_sequences(val_data, y_val_target)
     
@@ -475,7 +475,7 @@ def hyperparameter_tuning(data_splits, target_col):
     best_val_loss = float('inf')
     
     # Manual grid search for selected combinations
-    # Vi reducerer søgespacetn for at spare tid men vælger de mest sandsynlige vindere
+    # We reduce the search space to save time but choose the most likely winners
     search_combinations = [
         {'lstm_units': 250, 'dropout_rate': 0.3, 'learning_rate': 0.0005, 'batch_size': 8},
         {'lstm_units': 128, 'dropout_rate': 0.3, 'learning_rate': 0.0005, 'batch_size': 16},
@@ -516,7 +516,7 @@ def hyperparameter_tuning(data_splits, target_col):
         # Train model
         history = model.fit(
             X_train_seq, y_train_seq,
-            epochs=50,  # Reduceret for hyperparameter tuning
+            epochs=50,  # Reduced for hyperparameter tuning
             batch_size=batch_size,
             validation_data=(X_val_seq, y_val_seq),
             callbacks=callbacks,
@@ -536,47 +536,41 @@ def hyperparameter_tuning(data_splits, target_col):
     return best_params
 
 def evaluate_model(model, X_test_seq, y_test, target_scaler, horizon):
-    """Evaluerer modellen med test data."""
-    # Forudsig på testdata
+    """Evaluates the model with test data."""
+    # Predict on test data
     predictions = model.predict(X_test_seq)
     
-    # Omform forudsigelser til 1D
+    # Reshape predictions to 1D
     if isinstance(predictions, list):
-        # Hvis vi har multiple outputs, find det rette baseret på horisonten
+        # If we have multiple outputs, find the right one based on the horizon
         pred_index = FORECAST_HORIZONS.index(horizon)
         predictions = predictions[pred_index]
 
-    # Reshape til 2D for inverse transform
+    # Reshape to 2D for inverse transform
     predictions = predictions.reshape(-1, 1)
     
-    # Konverter y_test til 2D hvis det er 1D
+    # Convert y_test to 2D if it's 1D
     if y_test.ndim == 1:
         y_test_2d = y_test.reshape(-1, 1)
     else:
         y_test_2d = y_test
     
-    # Denormalisér forudsigelser og faktiske værdier
+    # Denormalize predictions and actual values
     predictions_denorm = target_scaler.inverse_transform(predictions)
     y_test_denorm = target_scaler.inverse_transform(y_test_2d)
     
-    # --- NY KODE: Konverter procentvis ændring tilbage til prisværdier ---
-    # Dette kræver at vi kender den aktuelle pris for hver testdag
-    # Vi kan bruge de gemte testpriser fra prepare_data
-    # Dette vil blive implementeret i evaluate_multi_horizon_model
-    # --- SLUT PÅ NY KODE ---
-    
-    # Beregn fejlmål
+    # Calculate error metrics
     mse = mean_squared_error(y_test_denorm, predictions_denorm)
     rmse = np.sqrt(mse)
     mae = mean_absolute_error(y_test_denorm, predictions_denorm)
     
-    # R^2 score (højere er bedre, max er 1.0)
+    # R^2 score (higher is better, max is 1.0)
     r2 = r2_score(y_test_denorm, predictions_denorm)
     
-    # Beregn MAPE (Mean Absolute Percentage Error)
+    # Calculate MAPE (Mean Absolute Percentage Error)
     mape = np.mean(np.abs((y_test_denorm - predictions_denorm) / y_test_denorm)) * 100
     
-    # Hvis R2 er negativ (værre end gennesnit), sæt til 0
+    # If R2 is negative (worse than average), set to 0
     r2 = max(0, r2)
     
     logging.info(f"{horizon}-day horizon forecast metrics:")
@@ -597,30 +591,30 @@ def train_model(model, X_train, y_train_dict, X_val, y_val_dict,
                batch_size=32, epochs=100, patience=20,
                model_save_path=None):
     """
-    Træner en seq2seq LSTM model med early stopping.
+    Trains a seq2seq LSTM model with early stopping.
     
     Args:
-        model: Kompileret seq2seq model
-        X_train: Træningsdata (samples, seq_length, features)
-        y_train_dict: Dictionary med targets for hver horisont
-        X_val: Valideringsdata
-        y_val_dict: Dictionary med valideringsmål for hver horisont
-        batch_size: Batch størrelse
-        epochs: Maksimalt antal epoker
-        patience: Tålmodighed for early stopping
-        model_save_path: Sti til at gemme den bedste model
+        model: Compiled seq2seq model
+        X_train: Training data (samples, seq_length, features)
+        y_train_dict: Dictionary with targets for each horizon
+        X_val: Validation data
+        y_val_dict: Dictionary with validation targets for each horizon
+        batch_size: Batch size
+        epochs: Maximum number of epochs
+        patience: Patience for early stopping
+        model_save_path: Path to save the best model
         
     Returns:
-        Trænet model og træningshistorik
+        Trained model and training history
     """
-    logging.info(f"Træner seq2seq model med {len(X_train)} træningssamples og {len(X_val)} valideringssamples")
+    logging.info(f"Training seq2seq model with {len(X_train)} training samples and {len(X_val)} validation samples")
     
-    # Konverter y_train_dict og y_val_dict til formatet model.fit forventer
-    # For seq2seq modellen bruger vi {output_navn: target_data}
+    # Convert y_train_dict and y_val_dict to the format model.fit expects
+    # For the seq2seq model we use {output_name: target_data}
     y_train_formatted = {f'output_{h}': y_train_dict[h] for h in y_train_dict.keys()}
     y_val_formatted = {f'output_{h}': y_val_dict[h] for h in y_val_dict.keys()}
     
-    # Opsæt callbacks
+    # Set up callbacks
     callbacks = [
         EarlyStopping(
             monitor='val_loss',
@@ -637,7 +631,7 @@ def train_model(model, X_train, y_train_dict, X_val, y_val_dict,
         )
     ]
     
-    # Tilføj ModelCheckpoint hvis en sti er angivet
+    # Add ModelCheckpoint if a path is provided
     if model_save_path:
         callbacks.append(
             ModelCheckpoint(
@@ -649,7 +643,7 @@ def train_model(model, X_train, y_train_dict, X_val, y_val_dict,
             )
         )
     
-    # Træn modellen
+    # Train model
     history = model.fit(
         X_train,
         y_train_formatted,
@@ -660,26 +654,26 @@ def train_model(model, X_train, y_train_dict, X_val, y_val_dict,
         verbose=2
     )
     
-    # Log træningsresultater
+    # Log training results
     final_epoch = len(history.history['loss'])
     final_loss = history.history['loss'][-1]
     final_val_loss = history.history['val_loss'][-1]
     
-    logging.info(f"Træning afsluttet efter {final_epoch} epoker")
+    logging.info(f"Training completed after {final_epoch} epochs")
     logging.info(f"Final loss: {final_loss:.4f}, val_loss: {final_val_loss:.4f}")
     
-    # Log individuelt horisont-metrics
+    # Log individual horizon metrics
     for h in y_train_dict.keys():
         output_name = f'output_{h}'
         if f'{output_name}_mae' in history.history:
             val_mae = history.history[f'val_{output_name}_mae'][-1]
-            logging.info(f"Horisont {h} val_mae: {val_mae:.4f}")
+            logging.info(f"Horizon {h} val_mae: {val_mae:.4f}")
     
     return model, history
 
 def evaluate_multi_horizon_model(model, X_test, y_test_dict, horizon_keys, scaler=None):
     """
-    Evaluerer modellen på testdata for alle horisonter.
+    Evaluates the model on test data for all horizons.
     """
     # Get predictions for each horizon
     predictions = model.predict(X_test)
@@ -703,7 +697,7 @@ def evaluate_multi_horizon_model(model, X_test, y_test_dict, horizon_keys, scale
     for i, h in enumerate(horizon_keys):
         target_key = f'price_target_{h}'
         if target_key not in y_test_dict:
-            target_key = list(y_test_dict.keys())[i]  # Fallback til rækkefølge
+            target_key = list(y_test_dict.keys())[i]  # Fallback to order
         
         y_true = y_test_dict[target_key]
         
@@ -722,34 +716,34 @@ def evaluate_multi_horizon_model(model, X_test, y_test_dict, horizon_keys, scale
             y_pred_denorm = horizon_scaler.inverse_transform(y_pred)
             y_true_denorm = horizon_scaler.inverse_transform(y_true)
             
-            # --- NY KODE: Konverter procentvis ændring tilbage til prisværdier ---
+            # --- NEW CODE: Convert percentage change back to price values ---
             if is_percent_change_model:
-                # Den forudsagte procentvise ændring skal konverteres tilbage til en pris
-                # Bemærk: Hvis vi forecastet mange dage frem, skal vi bruge den korrekte basispris
+                # The predicted percentage change needs to be converted back to a price
+                # Note: If we forecast many days ahead, we need to use the correct base price
                 horizon_days = int(h.replace('d', ''))
                 
-                # Juster vektorer for at matche længder (vi kan kun bruge fælles datapunkter)
+                # Adjust vectors to match lengths (we can only use common data points)
                 min_len = min(len(y_pred_denorm), len(test_prices) - horizon_days)
                 
-                # Oprette arrays til de konverterede priser
+                # Create arrays for the converted prices
                 actual_prices = np.zeros(min_len)
                 predicted_prices = np.zeros(min_len)
                 
                 for j in range(min_len):
-                    # For de faktiske værdier bruger vi fremtidige priser
+                    # For actual values we use future prices
                     actual_prices[j] = test_prices[j + horizon_days]
                     
-                    # For de forudsagte værdier anvender vi den procentvise ændring på nuværende pris
+                    # For predicted values we apply the percentage change to the current price
                     base_price = test_prices[j]
-                    percent_change = y_pred_denorm[j][0]  # Forudsagt procentændring
+                    percent_change = y_pred_denorm[j][0]  # Predicted percentage change
                     predicted_prices[j] = base_price * (1 + percent_change/100)
                 
-                # Erstat de denormaliserede værdier med faktiske prisværdier
+                # Replace the denormalized values with actual price values
                 y_pred_denorm = predicted_prices.reshape(-1, 1)
                 y_true_denorm = actual_prices.reshape(-1, 1)
                 
-                logging.info(f"Konverteret {h}-horisont tilbage til priser: Basis mean={np.mean(test_prices[:min_len]):.2f}, Forecast mean={np.mean(predicted_prices):.2f}")
-            # --- SLUT PÅ NY KODE ---
+                logging.info(f"Converted {h}-horizon back to prices: Base mean={np.mean(test_prices[:min_len]):.2f}, Forecast mean={np.mean(predicted_prices):.2f}")
+            # --- END OF NEW CODE ---
         else:
             # If no scaler, use as is
             y_pred_denorm = y_pred
@@ -785,33 +779,33 @@ def evaluate_multi_horizon_model(model, X_test, y_test_dict, horizon_keys, scale
 
 def save_multi_horizon_model(model, feature_scaler, target_scalers, metrics, feature_names, target_columns, seq_length, history=None):
     """
-    Gemmer LSTM modellen sammen med dens scaler og andre metadata.
+    Saves the LSTM model along with its scaler and other metadata.
     """
-    # Opret dato-timestamped path
+    # Create date-timestamped path
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     model_path = MODELS_DIR / f"lstm_multi_horizon_model.keras"
     meta_path = MODELS_DIR / f"lstm_model_metadata.json"
     
-    # Gem modellen
+    # Save the model
     try:
         model.save(model_path)
-        logging.info(f"Model gemt til {model_path}")
+        logging.info(f"Model saved to {model_path}")
     except Exception as e:
-        logging.error(f"Fejl ved gemning af model: {e}")
+        logging.error(f"Error saving model: {e}")
         traceback.print_exc()
     
-    # Gem scalers
+    # Save scalers
     joblib.dump(feature_scaler, MODELS_DIR / "lstm_feature_scaler.joblib")
     joblib.dump(target_scalers, MODELS_DIR / "lstm_target_scalers.joblib")
     
-    # Gem feature og target navne
+    # Save feature and target names
     joblib.dump(feature_names, MODELS_DIR / "lstm_feature_names.joblib")
     joblib.dump(target_columns, MODELS_DIR / "lstm_target_columns.joblib")
     
-    # Gem sequence length
+    # Save sequence length
     joblib.dump(seq_length, MODELS_DIR / "lstm_sequence_length.joblib")
     
-    # Gem feature medians til NaN-håndtering ved inference
+    # Save feature medians for NaN handling during inference
     try:
         if isinstance(feature_names, list) and len(feature_names) > 0:
             # Load original data to calculate medians
@@ -822,14 +816,14 @@ def save_multi_horizon_model(model, feature_scaler, target_scalers, metrics, fea
                     if feature in df.columns:
                         feature_medians[feature] = float(df[feature].median())
                 
-                # Gem medianer
+                # Save medians
                 if feature_medians:
                     joblib.dump(feature_medians, MODELS_DIR / "lstm_feature_medians.joblib")
-                    logging.info(f"Feature medians gemt for {len(feature_medians)} features")
+                    logging.info(f"Feature medians saved for {len(feature_medians)} features")
     except Exception as e:
-        logging.error(f"Fejl ved gemning af feature medians: {e}")
+        logging.error(f"Error saving feature medians: {e}")
     
-    # Gem metadata som JSON
+    # Save metadata as JSON
     metadata = {
         "model_type": "LSTM Multi-Horizon",
         "created_at": timestamp,
@@ -837,12 +831,12 @@ def save_multi_horizon_model(model, feature_scaler, target_scalers, metrics, fea
         "feature_count": len(feature_names),
         "target_columns": target_columns,
         "metrics": metrics,
-        "is_percent_change_model": True  # Tilføjet for at markere at denne model bruger procentvise ændringer
+        "is_percent_change_model": True  # Added to mark that this model uses percentage changes
     }
     
-    # Tilføj training history hvis tilgængelig
+    # Add training history if available
     if history is not None and hasattr(history, 'history'):
-        # Konverter numpy arrays til lister for JSON serialisering
+        # Convert numpy arrays to lists for JSON serialization
         hist_dict = {}
         for key, values in history.history.items():
             if isinstance(values, np.ndarray):
@@ -852,7 +846,7 @@ def save_multi_horizon_model(model, feature_scaler, target_scalers, metrics, fea
         
         metadata["training_history"] = hist_dict
         
-        # Plot training history og gem som billede
+        # Plot training history and save as image
         try:
             plt.figure(figsize=(12, 8))
             
@@ -888,13 +882,13 @@ def save_multi_horizon_model(model, feature_scaler, target_scalers, metrics, fea
             plt.savefig(FIGURES_DIR / f"training_history_{timestamp}.png")
             plt.close()
         except Exception as e:
-            logging.error(f"Fejl ved plotting af training history: {e}")
+            logging.error(f"Error plotting training history: {e}")
     
-    # Gem metadata
+    # Save metadata
     with open(meta_path, 'w') as f:
         json.dump(metadata, f, indent=2)
     
-    logging.info(f"Model metadata gemt til {meta_path}")
+    logging.info(f"Model metadata saved to {meta_path}")
     
     return model_path
 
@@ -902,36 +896,36 @@ def train_seq2seq_model(X_train, y_train_dict, X_val, y_val_dict,
                         seq_length=30, horizon_keys=['1d', '3d', '7d'], 
                         epochs=100, batch_size=32):
     """
-    Træner en seq2seq model med output for flere tidshorisonter.
+    Trains a seq2seq model with output for multiple time horizons.
     
     Args:
-        X_train: Træningsdata, features
-        y_train_dict: Dictionary med target for hver horisont for træningsdata
-        X_val: Valideringsdata, features
-        y_val_dict: Dictionary med target for hver horisont for valideringsdata
-        seq_length: Længde af input sekvenser
-        horizon_keys: Liste med tidshorisonter der skal forudsiges
-        epochs: Antal trænings-epoker
-        batch_size: Batch størrelse til træning
+        X_train: Training data, features
+        y_train_dict: Dictionary with target for each horizon for training data
+        X_val: Validation data, features
+        y_val_dict: Dictionary with target for each horizon for validation data
+        seq_length: Length of input sequences
+        horizon_keys: List of time horizons to predict
+        epochs: Number of training epochs
+        batch_size: Batch size for training
         
     Returns:
-        Trænet model, scaler og træningshistorik
+        Trained model, scaler and training history
     """
-    logging.info(f"Træner seq2seq model med {len(horizon_keys)} outputs: {horizon_keys}")
+    logging.info(f"Training seq2seq model with {len(horizon_keys)} outputs: {horizon_keys}")
     
-    # Forbered data som sekvenser
+    # Prepare data as sequences
     X_train_seq, y_train_seq_dict = prepare_sequences_for_seq2seq(
         X_train, y_train_dict, seq_length, horizon_keys)
     X_val_seq, y_val_seq_dict = prepare_sequences_for_seq2seq(
         X_val, y_val_dict, seq_length, horizon_keys)
     
-    # Opret model
+    # Create model
     model = build_seq2seq_model(
         input_shape=(seq_length, X_train.shape[1]), 
         horizon_keys=horizon_keys
     )
     
-    # Omstrukturerer target dictionaries til formatet keras forventer
+    # Restructure target dictionaries to the format keras expects
     train_targets = {f'output_{h}': y_train_seq_dict[h] for h in horizon_keys if h in y_train_seq_dict}
     val_targets = {f'output_{h}': y_val_seq_dict[h] for h in horizon_keys if h in y_val_seq_dict}
     
@@ -943,7 +937,7 @@ def train_seq2seq_model(X_train, y_train_dict, X_val, y_val_dict,
         verbose=1
     )
     
-    # Reducer learning rate callback
+    # Reduce learning rate callback
     reduce_lr = ReduceLROnPlateau(
         monitor='val_loss',
         factor=0.2,
@@ -960,8 +954,8 @@ def train_seq2seq_model(X_train, y_train_dict, X_val, y_val_dict,
         verbose=1
     )
     
-    # Træn model
-    logging.info(f"Starter træning med {epochs} epochs og batch size {batch_size}")
+    # Train model
+    logging.info(f"Starting training with {epochs} epochs and batch size {batch_size}")
     history = model.fit(
         X_train_seq,
         train_targets,
@@ -972,84 +966,84 @@ def train_seq2seq_model(X_train, y_train_dict, X_val, y_val_dict,
         verbose=1
     )
     
-    # Log træningsresultater
-    logging.info(f"Træning afsluttet efter {len(history.history['loss'])} epochs")
+    # Log training results
+    logging.info(f"Training completed after {len(history.history['loss'])} epochs")
     
-    # Log validering loss for hver horisont
+    # Log validation loss for each horizon
     for h in y_train_dict.keys():
         output_name = f'output_{h}'
         if f'{output_name}_mae' in history.history:
             val_mae = history.history[f'val_{output_name}_mae'][-1]
-            logging.info(f"Horisont {h} val_mae: {val_mae:.4f}")
+            logging.info(f"Horizon {h} val_mae: {val_mae:.4f}")
     
     return model, history
 
 def evaluate_seq2seq_model(model, X_test, y_test_dict, seq_length=30, horizon_keys=['1d', '3d', '7d']):
     """
-    Evaluerer en trænet seq2seq model på testdata og visualiserer resultaterne.
+    Evaluates a trained seq2seq model on test data and visualizes the results.
     
     Args:
-        model: Trænet seq2seq model
-        X_test: Testdata features
-        y_test_dict: Dictionary med target værdier for hver horisont
-        seq_length: Længde af input sekvenser
-        horizon_keys: Liste med horisonter der skal forudsiges
+        model: Trained seq2seq model
+        X_test: Test data features
+        y_test_dict: Dictionary with target values for each horizon
+        seq_length: Length of input sequences
+        horizon_keys: List of horizons to predict
         
     Returns:
-        DataFrame med resultater og metrics
+        DataFrame with results and metrics
     """
-    logging.info("Evaluerer seq2seq model på testdata...")
+    logging.info("Evaluating seq2seq model on test data...")
     
-    # Forbered sekvenser til evaluering
+    # Prepare sequences for evaluation
     X_test_seq, y_test_seq_dict = prepare_sequences_for_seq2seq(
         X_test, y_test_dict, seq_length, horizon_keys)
     
-    # Log information om data shapes
-    logging.info(f"Test sekvenser: X shape={X_test_seq.shape}")
+    # Log information about data shapes
+    logging.info(f"Test sequences: X shape={X_test_seq.shape}")
     for h in horizon_keys:
         if h in y_test_seq_dict:
-            logging.info(f"Test targets for horisont {h}: shape={y_test_seq_dict[h].shape}")
+            logging.info(f"Test targets for horizon {h}: shape={y_test_seq_dict[h].shape}")
     
-    # Omstrukturér target dictionaries til format der passer til Keras
+    # Restructure target dictionaries to format that fits Keras
     test_targets = {f'output_{h}': y_test_seq_dict[h] for h in horizon_keys if h in y_test_seq_dict}
     
-    # Evaluér model på testdata
+    # Evaluate model on test data
     test_metrics = model.evaluate(X_test_seq, test_targets, verbose=1)
     logging.info(f"Test metrics: {test_metrics}")
     
-    # Lav forudsigelser
+    # Make predictions
     predictions = model.predict(X_test_seq)
     
-    # Forbered en DataFrame til at gemme resultater
+    # Prepare a DataFrame to store results
     results = pd.DataFrame()
     
-    # For hver horisont, beregn metrics og visualiser resultater
+    # For each horizon, calculate metrics and visualize results
     for i, horizon in enumerate(horizon_keys):
         if horizon in y_test_seq_dict:
-            # Hent faktiske og forudsagte værdier
+            # Get actual and predicted values
             y_true = y_test_seq_dict[horizon]
             
-            # Håndter forskellige output formater fra model.predict
+            # Handle different output formats from model.predict
             if isinstance(predictions, dict):
                 y_pred = predictions[f'output_{horizon}']
             else:
-                # Hvis predictions er en liste af arrays (for multi-output modeller)
+                # If predictions is a list of arrays (for multi-output models)
                 y_pred = predictions[i] if i < len(predictions) else None
                 
             if y_pred is None:
-                logging.warning(f"Kunne ikke finde forudsigelser for horisont {horizon}")
+                logging.warning(f"Could not find predictions for horizon {horizon}")
                 continue
                 
-            # Beregn metrics
+            # Calculate metrics
             mse = mean_squared_error(y_true, y_pred)
             rmse = np.sqrt(mse)
             mae = mean_absolute_error(y_true, y_pred)
             r2 = r2_score(y_true, y_pred)
             
-            # Log resultater
-            logging.info(f"Horisont {horizon} - MSE: {mse:.4f}, RMSE: {rmse:.4f}, MAE: {mae:.4f}, R²: {r2:.4f}")
+            # Log results
+            logging.info(f"Horizon {horizon} - MSE: {mse:.4f}, RMSE: {rmse:.4f}, MAE: {mae:.4f}, R²: {r2:.4f}")
             
-            # Gem resultater
+            # Save results
             horizon_results = pd.DataFrame({
                 'Horizon': horizon,
                 'MSE': mse,
@@ -1060,35 +1054,35 @@ def evaluate_seq2seq_model(model, X_test, y_test_dict, seq_length=30, horizon_ke
             
             results = pd.concat([results, horizon_results], ignore_index=True)
             
-            # Visualiser forudsigelser
+            # Visualize predictions
             plt.figure(figsize=(12, 6))
-            plt.plot(y_true[:100], label='Faktisk', color='blue')
-            plt.plot(y_pred[:100], label='Forudsagt', color='red', linestyle='--')
-            plt.title(f'Seq2Seq Model - Forudsigelser for {horizon} horisont')
+            plt.plot(y_true[:100], label='Actual', color='blue')
+            plt.plot(y_pred[:100], label='Predicted', color='red', linestyle='--')
+            plt.title(f'Seq2Seq Model - Predictions for {horizon} horizon')
             plt.xlabel('Samples')
-            plt.ylabel('Normaliseret Prisændring')
+            plt.ylabel('Normalized Price Change')
             plt.legend()
             
-            # Gem figur
+            # Save figure
             fig_dir = Path('plots')
             fig_dir.mkdir(parents=True, exist_ok=True)
             plt.savefig(fig_dir / f'seq2seq_predictions_{horizon}.png')
             plt.close()
     
-    # Gem resultater til CSV
+    # Save results to CSV
     results_dir = Path('results')
     results_dir.mkdir(parents=True, exist_ok=True)
     results.to_csv(results_dir / 'seq2seq_evaluation_results.csv', index=False)
-    logging.info(f"Evaluering gemt til results/seq2seq_evaluation_results.csv")
+    logging.info(f"Evaluation saved to results/seq2seq_evaluation_results.csv")
     
     return results
 
 def main():
     """
-    Træner, evaluerer og gemmer en sequence-to-sequence LSTM model til at forudsige Vestas-aktiekursen
-    for flere tidshorisonter samtidigt (1, 3 og 7 dage).
+    Trains, evaluates and saves a sequence-to-sequence LSTM model to predict the Vestas stock price
+    for multiple time horizons simultaneously (1, 3, and 7 days).
     """
-    # Konfigurér logging
+    # Configure logging
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
@@ -1096,48 +1090,48 @@ def main():
     
     logging.info("Starting LSTM model training process...")
     
-    # Opret mapper hvis de ikke eksisterer
+    # Create directories if they don't exist
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
     FIGURES_DIR.mkdir(parents=True, exist_ok=True)
     
-    # Sæt random seeds for reproducerbarhed
+    # Set random seeds for reproducibility
     np.random.seed(42)
     tf.random.set_seed(42)
     
     try:
-        # Indlæs og forbered data
-        logging.info("Indlæser data...")
+        # Load and prepare data
+        logging.info("Loading data...")
         features_file = PROCESSED_FEATURES_DIR / "vestas_features_trading_days.csv"
         df = pd.read_csv(features_file)
         
-        # Konverter dato til index hvis den findes
+        # Convert date to index if it exists
         if 'Date' in df.columns:
             df['Date'] = pd.to_datetime(df['Date'])
             df = df.set_index('Date')
         
-        # Definer target kolonner - en for hver forecast horisont
-        forecast_horizons = [1, 3, 7]  # 1, 3 og 7 dage frem
+        # Define target columns - one for each forecast horizon
+        forecast_horizons = [1, 3, 7]  # 1, 3, and 7 days ahead
         target_columns = [f'price_target_{h}d' for h in forecast_horizons]
         
-        # Tjek om target kolonnerne findes
+        # Check if target columns exist
         for col in target_columns:
             if col not in df.columns:
-                raise ValueError(f"Målkolonne {col} findes ikke i data")
+                raise ValueError(f"Target column {col} does not exist in data")
         
-        logging.info(f"Anvender følgende målkolonner: {target_columns}")
+        logging.info(f"Using the following target columns: {target_columns}")
         
-        # Fjern rækker med NaN i target kolonnerne
+        # Remove rows with NaN in target columns
         df = df.dropna(subset=target_columns)
-        logging.info(f"Datasæt efter fjernelse af NaN-værdier: {df.shape}")
+        logging.info(f"Dataset after removing NaN values: {df.shape}")
         
-        # Del data i træning, validering og test
+        # Split data into training, validation, and test
         train_size = 0.7
         val_size = 0.15
         
-        # Sortér efter dato
+        # Sort by date
         df = df.sort_index()
         
-        # Definer træning, validering og test indeks
+        # Define training, validation, and test indices
         n = len(df)
         train_idx = int(n * train_size)
         val_idx = train_idx + int(n * val_size)
@@ -1146,65 +1140,65 @@ def main():
         df_val = df.iloc[train_idx:val_idx]
         df_test = df.iloc[val_idx:]
         
-        logging.info(f"Træningssæt størrelse: {len(df_train)}")
-        logging.info(f"Valideringssæt størrelse: {len(df_val)}")
-        logging.info(f"Testsæt størrelse: {len(df_test)}")
+        logging.info(f"Training set size: {len(df_train)}")
+        logging.info(f"Validation set size: {len(df_val)}")
+        logging.info(f"Test set size: {len(df_test)}")
         
-        # Vælg features (alle kolonner undtagen target kolonner)
+        # Select features (all columns except target columns)
         feature_columns = [col for col in df.columns if col not in target_columns]
         
-        # Fjern ikke-numeriske kolonner fra feature_columns
+        # Remove non-numeric columns from feature_columns
         numeric_feature_columns = []
         for col in feature_columns:
-            # Tjek om kolonnen er numerisk
+            # Check if column is numeric
             if pd.api.types.is_numeric_dtype(df[col]):
                 numeric_feature_columns.append(col)
             else:
-                logging.info(f"Dropper ikke-numerisk feature kolonne: {col}")
+                logging.info(f"Dropping non-numeric feature column: {col}")
         
-        logging.info(f"Bruger {len(numeric_feature_columns)} numeriske features ud af {len(feature_columns)} totale features")
+        logging.info(f"Using {len(numeric_feature_columns)} numeric features out of {len(feature_columns)} total features")
         feature_columns = numeric_feature_columns
         
-        # Håndter uendelige værdier og ekstreme tal
+        # Handle infinite values and extreme numbers
         for col in feature_columns:
-            # Erstat inf og -inf med NaN
+            # Replace inf and -inf with NaN
             df_train[col] = df_train[col].replace([np.inf, -np.inf], np.nan)
             df_val[col] = df_val[col].replace([np.inf, -np.inf], np.nan)
             df_test[col] = df_test[col].replace([np.inf, -np.inf], np.nan)
             
-            # Erstat NaN med median
+            # Replace NaN with median
             median_val = df_train[col].median()
             df_train[col] = df_train[col].fillna(median_val)
             df_val[col] = df_val[col].fillna(median_val)
             df_test[col] = df_test[col].fillna(median_val)
         
-        # Log kolonner med ekstreme værdier
+        # Log columns with extreme values
         for col in feature_columns:
             min_val = df_train[col].min()
             max_val = df_train[col].max()
             if max_val > 1e10 or min_val < -1e10:
-                logging.warning(f"Feature {col} har ekstreme værdier: min={min_val}, max={max_val}")
+                logging.warning(f"Feature {col} has extreme values: min={min_val}, max={max_val}")
                 
-                # Begræns ekstreme værdier
+                # Limit extreme values
                 df_train[col] = df_train[col].clip(-1e10, 1e10)
                 df_val[col] = df_val[col].clip(-1e10, 1e10)
                 df_test[col] = df_test[col].clip(-1e10, 1e10)
                 
-        # Skaler features
+        # Scale features
         feature_scaler = MinMaxScaler()
         X_train = feature_scaler.fit_transform(df_train[feature_columns])
         X_val = feature_scaler.transform(df_val[feature_columns])
         X_test = feature_scaler.transform(df_test[feature_columns])
         
-        # ---> BEREGN OG GEM MEDIANER FRA TRÆNINGSSÆTTET <---
+        # ---> CALCULATE AND SAVE MEDIANS FROM THE TRAINING SET <---
         logging.info("Calculating medians from training data...")
         feature_medians = df_train[feature_columns].median().to_dict()
         medians_path = MODELS_DIR / 'lstm_feature_medians.joblib'
         joblib.dump(feature_medians, medians_path)
         logging.info(f"Feature medians saved to {medians_path}")
-        # ---> FÆRDIG MED MEDIANER <---
+        # ---> DONE WITH MEDIANS <---
 
-        # Skaler targets (en scaler for hvert target)
+        # Scale targets (one scaler for each target)
         target_scalers = {}
         y_train_dict = {}
         y_val_dict = {}
@@ -1213,24 +1207,24 @@ def main():
         for target_col in target_columns:
             scaler = MinMaxScaler()
             
-            # Skaler hvert target
+            # Scale each target
             y_train_dict[target_col] = scaler.fit_transform(df_train[[target_col]]).flatten()
             y_val_dict[target_col] = scaler.transform(df_val[[target_col]]).flatten()
             y_test_dict[target_col] = scaler.transform(df_test[[target_col]]).flatten()
             
-            # Gem scaler
+            # Save scaler
             target_scalers[target_col] = scaler
         
-        # Definer sekvens længde (antal dage historik)
+        # Define sequence length (number of days history)
         seq_length = 30
         
-        # Hyperparametre
+        # Hyperparameters
         epochs = 100
         batch_size = 32
         patience = 15
         
-        # Træn seq2seq model
-        logging.info(f"Starter træning af seq2seq LSTM model med sekvens længde {seq_length}...")
+        # Train seq2seq model
+        logging.info(f"Starting training of seq2seq LSTM model with sequence length {seq_length}...")
         model, history = train_seq2seq_model(
             pd.DataFrame(X_train, columns=feature_columns, index=df_train.index), 
             {f'{h}d': y_train_dict[f'price_target_{h}d'] for h in [1, 3, 7]},
@@ -1242,7 +1236,7 @@ def main():
             batch_size=batch_size
         )
         
-        # Evaluér seq2seq model
+        # Evaluate seq2seq model
         results = evaluate_seq2seq_model(
             model,
             pd.DataFrame(X_test, columns=feature_columns, index=df_test.index),
@@ -1251,7 +1245,7 @@ def main():
             horizon_keys=['1d', '3d', '7d']
         )
         
-        # Plot træningshistorik
+        # Plot training history
         plt.figure(figsize=(12, 6))
         plt.plot(history.history['loss'], label='Training Loss')
         plt.plot(history.history['val_loss'], label='Validation Loss')
@@ -1261,51 +1255,51 @@ def main():
         plt.legend()
         plt.savefig('plots/seq2seq_training_history.png')
         
-        logging.info("Seq2Seq model træning og evaluering gennemført")
+        logging.info("Seq2Seq model training and evaluation completed")
         
-        # Gem model og hjælpefiler til API
-        logging.info("Gemmer model og hjælpefiler til API...")
+        # Save model and helper files for API
+        logging.info("Saving model and helper files for API...")
         
-        # Opret models-mappe hvis den ikke findes
+        # Create models directory if it doesn't exist
         models_dir = Path('models')
         models_dir.mkdir(parents=True, exist_ok=True)
         
-        # Gem model
+        # Save model
         model.save(models_dir / 'lstm_multi_horizon_model.keras')
-        logging.info("Model gemt som 'lstm_multi_horizon_model.keras'")
+        logging.info("Model saved as 'lstm_multi_horizon_model.keras'")
         
-        # Gem feature scaler
+        # Save feature scaler
         joblib.dump(feature_scaler, models_dir / 'lstm_feature_scaler.joblib')
-        logging.info("Feature scaler gemt som 'lstm_feature_scaler.joblib'")
+        logging.info("Feature scaler saved as 'lstm_feature_scaler.joblib'")
         
-        # Gem target scalers
+        # Save target scalers
         joblib.dump(target_scalers, models_dir / 'lstm_target_scalers.joblib')
-        logging.info("Target scalers gemt som 'lstm_target_scalers.joblib'")
+        logging.info("Target scalers saved as 'lstm_target_scalers.joblib'")
         
-        # Gem feature kolonner
+        # Save feature columns
         joblib.dump(feature_columns, models_dir / 'lstm_feature_names.joblib')
-        logging.info("Feature kolonner gemt som 'lstm_feature_names.joblib'")
+        logging.info("Feature columns saved as 'lstm_feature_names.joblib'")
         
-        # Gem sequence length
+        # Save sequence length
         joblib.dump(seq_length, models_dir / 'lstm_sequence_length.joblib')
-        logging.info("Sequence length gemt som 'lstm_sequence_length.joblib'")
+        logging.info("Sequence length saved as 'lstm_sequence_length.joblib'")
         
-        # ---> GEM MEDIAN FILNAVN <---
-        # Gem feature medians (tilføjet her for konsistens)
+        # ---> SAVE MEDIAN FILENAME <---
+        # Save feature medians (added here for consistency)
         joblib.dump(feature_medians, models_dir / 'lstm_feature_medians.joblib')
         logging.info("Feature medians saved as 'lstm_feature_medians.joblib'")
-        # ---> FÆRDIG MED MEDIAN FILNAVN <---
+        # ---> DONE WITH MEDIAN FILENAME <---
 
-        # Gem target kolonner
+        # Save target columns
         joblib.dump(target_columns, models_dir / 'lstm_target_columns.joblib')
-        logging.info("Target kolonner gemt som 'lstm_target_columns.joblib'")
+        logging.info("Target columns saved as 'lstm_target_columns.joblib'")
         
-        logging.info("Alle nødvendige filer til API gemt i models-mappen")
+        logging.info("All necessary files for API saved in models directory")
         
         return True
         
     except Exception as e:
-        logging.error(f"Fejl i LSTM model træning: {e}")
+        logging.error(f"Error in LSTM model training: {e}")
         traceback.print_exc()
         return False
 

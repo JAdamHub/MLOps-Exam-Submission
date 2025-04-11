@@ -12,14 +12,14 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 # Determine project root based on script location
 # Assumes the script is in src/pipeline
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-INTERMEDIATE_COMBINED_DIR = PROJECT_ROOT / "data" / "intermediate" / "combined"  # Updated path
-INTERMEDIATE_PREPROCESSED_DIR = PROJECT_ROOT / "data" / "intermediate" / "preprocessed"  # Updated path
+INTERMEDIATE_COMBINED_DIR = PROJECT_ROOT / "data" / "intermediate" / "combined"
+INTERMEDIATE_PREPROCESSED_DIR = PROJECT_ROOT / "data" / "intermediate" / "preprocessed" 
 MODELS_DIR = PROJECT_ROOT / "models"
 
 # Input file from combined data step
 INPUT_FILENAME = "vestas_macro_combined_trading_days.csv"
 # Output files
-OUTPUT_FILENAME = "vestas_macro_preprocessed_trading_days.csv"  # Opdateret filnavn til Vestas
+OUTPUT_FILENAME = "vestas_macro_preprocessed_trading_days.csv"
 SCALER_FILENAME = "minmax_scaler.joblib"
 
 # Ensure output directories exist
