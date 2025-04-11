@@ -8,14 +8,14 @@ import numpy as np
 from pathlib import Path
 import sys
 
-# Add src to path
-sys.path.append(str(Path(__file__).parent.parent))
+# Add project root to path
+sys.path.append(str(Path(__file__).parent.parent.parent))
 
-from models.lstm_model import LSTMModel
-from data.data_processor import DataProcessor
-from pipeline.stock_data_collector import collect_stock_data
-from pipeline.preprocessing import preprocess_data, save_processed_data
-from pipeline.combined_data_processor import process_interval_data
+from src.models.lstm_model import LSTMModel
+from src.data.data_processor import DataProcessor
+from src.pipeline.stock_data_collector import collect_stock_data
+from src.pipeline.preprocessing import preprocess_data, save_processed_data
+from src.pipeline.combined_data_processor import process_interval_data
 
 # Setup logging
 logging.basicConfig(
