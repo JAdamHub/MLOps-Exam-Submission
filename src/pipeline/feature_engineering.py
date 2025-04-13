@@ -596,42 +596,42 @@ def calculate_macro_features(data):
     return result_df
 
 def main():
-    """Main function to run the feature engineering process."""
+    """main function to run the feature engineering process."""
     logging.info("Starting feature engineering for Vestas stock data")
     
     try:
-        # Indlæs præprocesseret data med Vestas og makroøkonomisk data
+        # load preprocessed data with vestas and macroeconomic data
         input_file = INPUT_FILE_PATH
         
-        # Indlæs data
+        # load data
         df = load_data(input_file)
         if df is None:
             return
         
         logging.info(f"Loaded preprocessed data with {len(df)} rows and {len(df.columns)} columns")
         
-        # Generer basis-features
+        # generate basic features
         features_df = create_features(df)
-    if features_df is None:
+        if features_df is None:
             return
         
-        # Generer market features
+        # generate market features
         logging.info("Generating market-specific features...")
         features_df = calculate_market_features(features_df)
         
-        # Generer makroøkonomiske features
+        # generate macroeconomic features
         logging.info("Generating macroeconomic features...")
         features_df = calculate_macro_features(features_df)
         
-        # Gem det endelige datasæt med alle features
-    save_features(features_df, OUTPUT_FILE_PATH)
+        # save the final dataset with all features
+        save_features(features_df, OUTPUT_FILE_PATH)
 
-        # Gem også en simplere version med kun de mest relevante features (for reference)
+        # also save a simpler version with only the most relevant features (for reference)
         latest_data = features_df.tail(100).copy()
-        # Sikre at vi kun beholder numeriske kolonner
+        # ensure we only keep numeric columns
         latest_data = latest_data.select_dtypes(include=[np.number])
         
-        # Gem de sidste 100 rækker som seneste data for simpel reference
+        # save the last 100 rows as latest data for simple reference
         latest_filepath = PROCESSED_FEATURES_DIR / "latest_data.csv"
         latest_data.to_csv(latest_filepath)
         logging.info(f"Latest sample data saved to {latest_filepath}")
