@@ -228,3 +228,73 @@ Streamlit-appen vil køre på: http://localhost:8501
 ## Licens
 
 Dette projekt er udviklet til uddannelsesformål.
+
+## 🐳 Docker Instructions
+
+This project can be run in a Docker container for easy deployment and isolation. We provide both Docker Compose and standalone Docker configurations.
+
+### Prerequisites
+- Docker and Docker Compose installed on your system
+- Alpha Vantage API key (you can get a free key at [Alpha Vantage](https://www.alphavantage.co/support/#api-key))
+
+### Using the Run Script (Recommended)
+
+1. Run the setup script:
+   ```bash
+   ./docker/run.sh
+   ```
+   This script will:
+   - Create necessary directories
+   - Check for the .env file with your API key
+   - Start the container with Docker Compose
+
+2. Access the API at: http://localhost:8000
+   - API documentation: http://localhost:8000/docs
+
+### Manual Docker Compose Setup
+
+1. Create directories for data persistence:
+   ```bash
+   mkdir -p data/raw/stocks data/raw/macro data/intermediate/combined data/intermediate/preprocessed data/features models reports results plots
+   ```
+
+2. Ensure your `.env` file contains your Alpha Vantage API key:
+   ```
+   ALPHA_VANTAGE_API_KEY="your_api_key_here"
+   ```
+
+3. Start the container:
+   ```bash
+   docker-compose up -d
+   ```
+
+4. To view logs:
+   ```bash
+   docker-compose logs -f
+   ```
+
+5. To stop the container:
+   ```bash
+   docker-compose down
+   ```
+
+### Using Docker Directly
+
+1. Build the image:
+   ```bash
+   docker build -t vestas-stock-api .
+   ```
+
+2. Run the container:
+   ```bash
+   docker run -d -p 8000:8000 \
+     -v ./data:/app/data \
+     -v ./models:/app/models \
+     -v ./reports:/app/reports \
+     -v ./results:/app/results \
+     --env-file .env \
+     --name vestas-stock-api \
+     vestas-stock-api
+   ```
+
+For more detailed instructions, see [docker/README.md](docker/README.md).

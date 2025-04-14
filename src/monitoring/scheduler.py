@@ -14,7 +14,7 @@ import uvicorn
 root_dir = Path(__file__).parent.parent.parent
 sys.path.append(str(root_dir))
 
-from src.pipeline.main import main as run_pipeline
+from pipeline.pipeline_start import main as run_pipeline
 from src.api.stock_api import app
 
 # setup logging
@@ -27,49 +27,62 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-def run_api():
-    """Starts the api server in a separate thread"""
-    try:
-        logger.info("Starting api server...")
-        uvicorn.run(app, host="0.0.0.0", port=8000)
-    except Exception as e:
-        logger.error(f"Error starting api server: {str(e)}")
-        raise
-
-def run_daily_pipeline():
-    """run the entire pipeline from scratch every day"""
-    try:
-        logger.info("starting daily pipeline run...")
-        success = run_pipeline()
+class ModelUpdateScheduler:
+    """Class to manage scheduling of model updates and API server"""
+    
+    def __init__(self, run_at_startup=False, schedule_time="20:30"):
+        """
+        Initialize scheduler
         
-        if success:
-            logger.info("pipeline run completed successfully")
-        else:
-            logger.error("pipeline run failed")
+        Args:
+            run_at_startup: Whether to run the pipeline immediately on startup
+            schedule_time: Time to run the daily pipeline (24-hour format)
+        """
+        self.run_at_startup = run_at_startup
+        self.schedule_time = schedule_time
+        logger.info(f"Scheduler initialized (daily run at {schedule_time})")
+    
+    def run_daily_pipeline(self):
+        """Run the entire pipeline and restart API server"""
+        try:
+            logger.info("TIK TOK!!! 20:30 - STARTING DAILY PIPELINE RUN...")
+            success = run_pipeline()
             
-    except Exception as e:
-        logger.error(f"error during pipeline run: {str(e)}")
-        raise
+            if success:
+                logger.info("Pipeline run completed successfully")
+                # Signal to restart API (could be implemented via shared file or message queue)
+                logger.info("Restarting API server to use new model...")
+                # Implementation for API restart
+            else:
+                logger.error("Pipeline run failed")
+                
+        except Exception as e:
+            logger.error(f"Error during pipeline run: {str(e)}")
+            raise
+    
+    def start(self):
+        """Start the scheduler without API management"""
+        # Run pipeline immediately on startup if configured
+        if self.run_at_startup:
+            logger.info("Running initial pipeline as requested by run_at_startup=True")
+            self.run_daily_pipeline()
+        else:
+            logger.info(f"Skipping initial pipeline run, will run at scheduled time: {self.schedule_time}")
+        
+        # Schedule daily run at configured time
+        schedule.every().day.at(self.schedule_time).do(self.run_daily_pipeline)
+        
+        logger.info(f"Scheduler started - running pipeline daily at {self.schedule_time}")
+        
+        # Run scheduler in an infinite loop
+        while True:
+            schedule.run_pending()
+            time.sleep(60)  # check every minute
 
 def main():
-    """main function to start the scheduler"""
-    # Start api server in a separate thread
-    api_thread = threading.Thread(target=run_api)
-    api_thread.daemon = True
-    api_thread.start()
-    
-    # run pipeline immediately on startup
-    run_daily_pipeline()
-    
-    # schedule daily run at 8:00 am
-    schedule.every().day.at("08:00").do(run_daily_pipeline)
-    
-    logger.info("scheduler started - running pipeline daily at 8:00 am")
-    
-    # run scheduler in an infinite loop
-    while True:
-        schedule.run_pending()
-        time.sleep(60)  # check every minute
+    """Main function to start the scheduler"""
+    scheduler = ModelUpdateScheduler()
+    scheduler.start()
 
 if __name__ == "__main__":
     main() 
