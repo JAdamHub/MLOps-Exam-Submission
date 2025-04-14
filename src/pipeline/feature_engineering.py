@@ -612,7 +612,7 @@ def main():
         
         # generate basic features
         features_df = create_features(df)
-        if features_df is None:
+    if features_df is None:
             return
         
         # generate market features
@@ -624,7 +624,7 @@ def main():
         features_df = calculate_macro_features(features_df)
         
         # save the final dataset with all features
-        save_features(features_df, OUTPUT_FILE_PATH)
+    save_features(features_df, OUTPUT_FILE_PATH)
 
         # also save a simpler version with only the most relevant features (for reference)
         latest_data = features_df.tail(100).copy()

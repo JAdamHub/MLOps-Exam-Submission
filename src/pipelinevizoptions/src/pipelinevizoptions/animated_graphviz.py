@@ -32,20 +32,20 @@ def create_animated_pipeline():
             preproc_edge_color = 'green' if active_step >= 1 else 'gray50'
             feature_edge_color = 'green' if active_step >= 2 else 'gray50'
             
-            c.node('raw_data', 'Raw Crypto Data\n(bitcoin_usd_365d_raw.csv)', fillcolor=data_color)
-            c.node('macro_data', 'Macroeconomic Data\n(Yahoo Finance API)', fillcolor=data_color)
+            c.node('vestas_data', 'Vestas Stock Data\n(VWSB.DEX)', fillcolor=data_color)
+            c.node('macro_data', 'Macroeconomic Data\n(Alpha Vantage API)', fillcolor=data_color)
             c.node('combined_data', 'Combined Data\n(combined_data_processor.py)', fillcolor=preproc_color)
             c.node('processed_data', 'Processed Data\n(preprocessing.py)', fillcolor=preproc_color)
             c.node('feature_data', 'Feature Data\n(feature_engineering.py)', fillcolor=feature_color)
             
             # Data flow edges med farver og moving dots
             if active_step == 0:
-                c.edge('raw_data', 'combined_data', color=data_edge_color, 
+                c.edge('vestas_data', 'combined_data', color=data_edge_color, 
                       label='●' if dot_position < 0.5 else '')
                 c.edge('macro_data', 'combined_data', color=data_edge_color,
                       label='●' if dot_position >= 0.5 else '')
             else:
-                c.edge('raw_data', 'combined_data', color=data_edge_color)
+                c.edge('vestas_data', 'combined_data', color=data_edge_color)
                 c.edge('macro_data', 'combined_data', color=data_edge_color)
             
             if active_step == 1:
@@ -68,11 +68,11 @@ def create_animated_pipeline():
             model_color = 'lightyellow' if active_step >= 3 else 'lightgray'
             model_edge_color = 'orange' if active_step >= 3 else 'gray50'
             
-            c.node('model_training', 'Model Training\n(training.py)', fillcolor=model_color)
-            c.node('xgboost_model', 'XGBoost Model\n(xgboost_model.joblib)', fillcolor=model_color)
-            c.node('scaler', 'Feature Scaler\n(scaler.joblib)', fillcolor=model_color)
-            c.node('feature_names', 'Feature Names\n(feature_names.joblib)', fillcolor=model_color)
-            c.node('model_metrics', 'Model Metrics\n(training_metrics.json)', fillcolor=model_color)
+            c.node('model_training', 'LSTM Model Training\n(lstm_model.py)', fillcolor=model_color)
+            c.node('lstm_model', 'LSTM Model\n(lstm_multi_horizon_model.keras)', fillcolor=model_color)
+            c.node('feature_scaler', 'Feature Scaler\n(lstm_feature_scaler.joblib)', fillcolor=model_color)
+            c.node('target_scalers', 'Target Scalers\n(lstm_target_scalers.joblib)', fillcolor=model_color)
+            c.node('model_metrics', 'Model Metrics\n(model_metrics.json)', fillcolor=model_color)
             
             # Model flow edges med farver og moving dots
             if active_step == 3:
@@ -82,76 +82,57 @@ def create_animated_pipeline():
                 c.edge('feature_data', 'model_training', color=model_edge_color)
             
             if active_step == 4:
-                c.edge('model_training', 'xgboost_model', color=model_edge_color,
+                c.edge('model_training', 'lstm_model', color=model_edge_color,
                       label='●' if dot_position < 0.25 else '')
-                c.edge('model_training', 'scaler', color=model_edge_color,
+                c.edge('model_training', 'feature_scaler', color=model_edge_color,
                       label='●' if 0.25 <= dot_position < 0.5 else '')
-                c.edge('model_training', 'feature_names', color=model_edge_color,
+                c.edge('model_training', 'target_scalers', color=model_edge_color,
                       label='●' if 0.5 <= dot_position < 0.75 else '')
                 c.edge('model_training', 'model_metrics', color=model_edge_color,
                       label='●' if dot_position >= 0.75 else '')
             else:
-                c.edge('model_training', 'xgboost_model', color=model_edge_color)
-                c.edge('model_training', 'scaler', color=model_edge_color)
-                c.edge('model_training', 'feature_names', color=model_edge_color)
+                c.edge('model_training', 'lstm_model', color=model_edge_color)
+                c.edge('model_training', 'feature_scaler', color=model_edge_color)
+                c.edge('model_training', 'target_scalers', color=model_edge_color)
                 c.edge('model_training', 'model_metrics', color=model_edge_color)
         
-        # API & Frontend Nodes
+        # API & Monitoring Nodes
         with dot.subgraph(name='cluster_2') as c:
-            c.attr(label='API & Frontend')
+            c.attr(label='API & Monitoring')
             
             # Node farver baseret på active step
             api_color = 'lightpink' if active_step >= 5 else 'lightgray'
             api_edge_color = 'red' if active_step >= 5 else 'gray50'
             
-            c.node('api', 'FastAPI\n(api/main.py)', fillcolor=api_color)
-            c.node('streamlit', 'Streamlit Frontend\n(streamlit/app.py)', fillcolor=api_color)
+            c.node('api', 'FastAPI\n(stock_api.py)', fillcolor=api_color)
             c.node('prediction_store', 'Prediction Store\n(prediction_store.py)', fillcolor=api_color)
+            c.node('scheduler', 'Model Update Scheduler\n(scheduler.py)', fillcolor=api_color)
+            c.node('metrics_viz', 'Model Metrics Viz\n(model_metrics_viz.py)', fillcolor=api_color)
             
             # API flow edges med farver og moving dots
             if active_step == 5:
-                c.edge('xgboost_model', 'api', color=api_edge_color,
+                c.edge('lstm_model', 'api', color=api_edge_color,
                       label='●' if dot_position < 0.33 else '')
-                c.edge('scaler', 'api', color=api_edge_color,
+                c.edge('feature_scaler', 'api', color=api_edge_color,
                       label='●' if 0.33 <= dot_position < 0.66 else '')
-                c.edge('feature_names', 'api', color=api_edge_color,
+                c.edge('target_scalers', 'api', color=api_edge_color,
                       label='●' if dot_position >= 0.66 else '')
             else:
-                c.edge('xgboost_model', 'api', color=api_edge_color)
-                c.edge('scaler', 'api', color=api_edge_color)
-                c.edge('feature_names', 'api', color=api_edge_color)
+                c.edge('lstm_model', 'api', color=api_edge_color)
+                c.edge('feature_scaler', 'api', color=api_edge_color)
+                c.edge('target_scalers', 'api', color=api_edge_color)
             
             if active_step == 6:
-                c.edge('api', 'streamlit', color=api_edge_color,
-                      label='●' if dot_position < 0.5 else '')
                 c.edge('api', 'prediction_store', color=api_edge_color,
-                      label='●' if dot_position >= 0.5 else '')
-            else:
-                c.edge('api', 'streamlit', color=api_edge_color)
-                c.edge('api', 'prediction_store', color=api_edge_color)
-        
-        # Monitoring Nodes
-        with dot.subgraph(name='cluster_3') as c:
-            c.attr(label='Monitoring')
-            
-            # Node farver baseret på active step
-            monitor_color = 'lightblue' if active_step >= 6 else 'lightgray'
-            monitor_edge_color = 'blue' if active_step >= 6 else 'gray50'
-            
-            c.node('scheduler', 'Model Update Scheduler\n(scheduler.py)', fillcolor=monitor_color)
-            c.node('model_metrics_viz', 'Model Metrics Viz\n(model_metrics_viz.py)', fillcolor=monitor_color)
-            
-            # Monitoring flow edges med farver og moving dots
-            if active_step == 7:
-                c.edge('prediction_store', 'scheduler', color=monitor_edge_color,
                       label='●' if dot_position < 0.5 else '')
-                c.edge('model_metrics', 'model_metrics_viz', color=monitor_edge_color,
+                c.edge('model_metrics', 'metrics_viz', color=api_edge_color,
                       label='●' if dot_position >= 0.5 else '')
             else:
-                c.edge('prediction_store', 'scheduler', color=monitor_edge_color)
-                c.edge('model_metrics', 'model_metrics_viz', color=monitor_edge_color)
+                c.edge('api', 'prediction_store', color=api_edge_color)
+                c.edge('model_metrics', 'metrics_viz', color=api_edge_color)
             
-            c.edge('scheduler', 'model_training', style='dashed', color=monitor_edge_color)
+            c.edge('prediction_store', 'scheduler', color=api_edge_color)
+            c.edge('scheduler', 'model_training', style='dashed', color=api_edge_color)
         
         return dot
     
@@ -161,7 +142,7 @@ def create_animated_pipeline():
     
     # Generer frames for hvert step og dot position
     frames = []
-    steps = 8  # Antal steps i pipeline
+    steps = 7  # Antal steps i pipeline
     dot_positions = np.linspace(0, 1, 10)  # 10 positioner for dot animation
     
     for step in range(steps):
