@@ -34,8 +34,8 @@ env/
 
 # Data and Models
 data/
-#models/*.joblib
-#models/*.keras
+models/*.joblib
+models/*.keras
 
 # Logs
 *.log
