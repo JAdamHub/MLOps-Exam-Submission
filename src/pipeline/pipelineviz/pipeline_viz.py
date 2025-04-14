@@ -47,12 +47,15 @@ def create_pipeline_visualization():
     # API & Frontend Nodes (right)
     with dot.subgraph(name='cluster_2') as c:
         c.attr(label='API & Frontend')
+        c.node('workflow_runner', 'Workflow Runner\n(main.py)', fillcolor='lightpink')
         c.node('api', 'FastAPI\n(stock_api.py)', fillcolor='lightpink')
         c.node('streamlit', 'Streamlit Frontend\n(streamlit/app.py)', fillcolor='lightpink')
-        c.node('scheduler', 'Model Update Scheduler\n(scheduler.py)', fillcolor='lightpink')
         c.node('metrics_viz', 'Model Metrics Viz\n(model_results_visualizer.py)', fillcolor='lightpink')
         
         # API flow edges
+        c.edge('workflow_runner', 'api', color='red')
+        c.edge('workflow_runner', 'metrics_viz', color='red')
+        c.edge('workflow_runner', 'streamlit', color='red')
         c.edge('lstm_model', 'api', color='red')
         c.edge('feature_scaler', 'api', color='red')
         c.edge('target_scalers', 'api', color='red')
@@ -60,13 +63,13 @@ def create_pipeline_visualization():
         c.edge('model_metrics', 'metrics_viz', color='red')
         c.edge('metrics_viz', 'streamlit', color='red')
     
-    # Scheduler flow (back to data collection)
-    dot.edge('scheduler', 'vestas_data', style='dashed', color='red', label='Fetch New Data')
-    dot.edge('scheduler', 'macro_data', style='dashed', color='red', label='Fetch New Data')
+    # Workflow Runner flow (back to data collection)
+    dot.edge('workflow_runner', 'vestas_data', style='dashed', color='red', label='Fetch New Data')
+    dot.edge('workflow_runner', 'macro_data', style='dashed', color='red', label='Fetch New Data')
     
     # Force order with invisible edges
     dot.edge('vestas_data', 'model_training', style='invis', weight='100')
-    dot.edge('model_training', 'api', style='invis', weight='100')
+    dot.edge('model_training', 'workflow_runner', style='invis', weight='100')
     
     # Create output directory
     output_dir = Path(__file__).parent  # Save in same directory as this file
