@@ -590,36 +590,9 @@ def collect_macro_data():
         save_data(macro_df, MACRO_DAILY_FILENAME, RAW_MACRO_DIR)
         logging.info(f"Combined macro economic data saved with {len(macro_df.columns)} indicators")
     else:
-        # if all api calls failed, generate mock data
-        # we need a dataset for mock data, so we get our vestas data first
-        vestas_data_path = RAW_STOCKS_DIR / TARGET_DAILY_FILENAME
-        if vestas_data_path.exists():
-            vestas_df = pd.read_csv(vestas_data_path, index_col=0, parse_dates=True)
-            mock_macro_df = generate_mock_macro_data(vestas_df.index)
-        else:
-            # if we don't have vestas data, generate mock stock data first and use it as index
-            mock_stock_df = generate_mock_stock_data()
-            mock_macro_df = generate_mock_macro_data(mock_stock_df.index)
-        
-        # add is_trading_day column
-        mock_macro_df['is_trading_day'] = 1
-        
-        # save mock macroeconomic dataset
-        save_data(mock_macro_df, MACRO_DAILY_FILENAME, RAW_MACRO_DIR)
-        logging.warning(f"Mock macro economic data saved with {len(mock_macro_df.columns)} indicators")
-        
-        # also save individual files for each indicator
-        for symbol, info in MACRO_INDICATORS.items():
-            indikator_navn = info['name']
-            if indikator_navn in mock_macro_df.columns:
-                indikator_df = pd.DataFrame({
-                    'close': mock_macro_df[indikator_navn]
-                }, index=mock_macro_df.index)
-                filename = f"{indikator_navn}_daily.csv"
-                save_data(indikator_df, filename, RAW_MACRO_DIR)
-        
-        logging.info("Generated and saved individual mock indicator files")
-        all_success = True  # mock-data ensures pipeline can continue
+        # if all api calls failed, log error
+        logging.error("Failed to collect any macro economic data. Pipeline cannot continue without valid macro data.")
+        all_success = False  # no data was collected, mark as failed
     
     return all_success
 
@@ -685,37 +658,9 @@ def collect_vestas_data():
     else:
         logging.error(f"Failed to fetch data for symbol {STOCK_SYMBOL}")
     
-    # if the symbol didn't work, generate mock data as fallback
+    # if the symbol didn't work, log an error instead of generating mock data
     if not success:
-        logging.warning("Vestas stock symbol failed. Generating mock data as fallback")
-        mock_data = generate_mock_stock_data()
-        
-        if save_data(mock_data, TARGET_DAILY_FILENAME, RAW_STOCKS_DIR):
-            logging.info("Mock daily stock data saved successfully")
-            save_trading_days_only(mock_data)
-            
-            # also generate weekly and monthly data
-            weekly_mock = mock_data.resample('W').agg({
-                'open': 'first', 
-                'high': 'max', 
-                'low': 'min', 
-                'close': 'last',
-                'volume': 'sum'
-            })
-            save_data(weekly_mock, TARGET_WEEKLY_FILENAME, RAW_STOCKS_DIR)
-            
-            monthly_mock = mock_data.resample('M').agg({
-                'open': 'first', 
-                'high': 'max', 
-                'low': 'min', 
-                'close': 'last',
-                'volume': 'sum'
-            })
-            save_data(monthly_mock, TARGET_MONTHLY_FILENAME, RAW_STOCKS_DIR)
-            
-            success = True
-        else:
-            logging.error("Failed to save mock stock data")
+        logging.error("Failed to collect Vestas stock data. Pipeline cannot continue without valid stock data.")
     
     return success
 
@@ -727,20 +672,21 @@ def main():
     logging.info("=== Starting Vestas Stock Data Collection ===")
     vestas_success = collect_vestas_data()
     
+    if not vestas_success:
+        logging.error("Vestas stock data collection failed. Pipeline cannot continue.")
+        return False
+    
     # collect macroeconomic data
     logging.info("=== Starting Macro Economic Data Collection ===")
     macro_success = collect_macro_data()
     
-    if vestas_success and macro_success:
-        logging.info("=== All Data Collection Completed Successfully ===")
-        return True
-    else:
-        logging.error("=== Data Collection Process Encountered Errors ===")
-        if not vestas_success:
-            logging.error("Vestas stock data collection failed")
-        if not macro_success:
-            logging.error("Macro economic data collection failed")
+    if not macro_success:
+        logging.error("Macro economic data collection failed. Pipeline cannot continue.")
         return False
+    
+    # If we reach here, both steps succeeded
+    logging.info("=== All Data Collection Completed Successfully ===")
+    return True
 
 if __name__ == "__main__":
     main() 

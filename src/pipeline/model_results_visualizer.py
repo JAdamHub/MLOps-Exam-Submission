@@ -27,7 +27,7 @@ class ModelResultsVisualizer:
         """Find all result CSV files in the results directory"""
         pattern = os.path.join(self.results_dir, 'seq2seq_evaluation_results_*.csv')
         files = glob.glob(pattern)
-        files.sort()  # Sort by filename (which includes timestamp)
+        files.sort()  # Sort by filename
         logger.info(f"Found {len(files)} results files")
         return files
     
@@ -263,13 +263,11 @@ class ModelResultsVisualizer:
             report_dir = Path(save_dir)
             report_dir.mkdir(parents=True, exist_ok=True)
             
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            
             # Generate plots
-            self.plot_metric_history('R2', f"{save_dir}/lstm_r2_history_{timestamp}.png")
-            self.plot_metric_history('RMSE', f"{save_dir}/lstm_rmse_history_{timestamp}.png")
-            self.plot_horizon_comparison('R2', True, f"{save_dir}/lstm_r2_comparison_{timestamp}.png")
-            self.plot_metrics_radar(True, f"{save_dir}/lstm_metrics_radar_{timestamp}.png")
+            self.plot_metric_history('R2', f"{save_dir}/lstm_r2_history.png")
+            self.plot_metric_history('RMSE', f"{save_dir}/lstm_rmse_history.png")
+            self.plot_horizon_comparison('R2', True, f"{save_dir}/lstm_r2_comparison.png")
+            self.plot_metrics_radar(True, f"{save_dir}/lstm_metrics_radar.png")
             
             # Generate summary table
             if not self.all_results.empty:
@@ -279,7 +277,7 @@ class ModelResultsVisualizer:
                     latest_results = latest_results[latest_results['timestamp'] == latest_timestamp]
                 
                 # Save summary to CSV
-                latest_results.to_csv(f"{save_dir}/lstm_latest_metrics_{timestamp}.csv", index=False)
+                latest_results.to_csv(f"{save_dir}/lstm_latest_metrics.csv", index=False)
                 
                 logger.info(f"Latest metrics:\n{latest_results[['Horizon', 'RMSE', 'MAE', 'R2']]}")
             

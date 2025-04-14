@@ -59,9 +59,9 @@ def main():
     logging.info("note: this pipeline only works with data from trading days (danish stock exchange opening days)")
     
     # data collection steps - collects both vestas stock data and macroeconomic data
-    # use skip_errors=true, as we have implemented fallback mechanisms in stock_data_collector.py
-    if not run_module("src.pipeline.stock_data_collector", skip_errors=True):
-        logging.warning("stock data collection encountered errors but continuing with fallback data")
+    if not run_module("src.pipeline.stock_data_collector", skip_errors=False):
+        logging.error("stock data collection failed - stopping pipeline")
+        sys.exit(1)
     else:
         logging.info("stock data collection completed successfully")
     

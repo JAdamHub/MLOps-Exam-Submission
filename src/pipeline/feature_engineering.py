@@ -16,9 +16,9 @@ PROCESSED_FEATURES_DIR = PROJECT_ROOT / "data" / "features"
 MODELS_DIR = PROJECT_ROOT / "models"
 
 # input file from preprocessing step
-INPUT_FILENAME = "vestas_macro_preprocessed_trading_days.csv"  # updated to vestas trading days version
+INPUT_FILENAME = "vestas_macro_preprocessed_trading_days.csv"
 # output file
-OUTPUT_FILENAME = "vestas_features_trading_days.csv"  # updated to vestas trading days version
+OUTPUT_FILENAME = "vestas_features_trading_days.csv"
 
 # feature engineering parameters
 PRICE_COLUMN = 'close'  # stock price typically uses "close" as the primary price column
