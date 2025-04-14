@@ -33,39 +33,14 @@ def custom_lambda_layer(tensor):
     # Return tensor unchanged
     return tensor
 
-# Function to constrain price predictions to realistic values
 def constrain_price_prediction(prediction: float, current_price: float, horizon_days: int) -> float:
-    """
-    Constrain price predictions to a realistic range based on the current price and time horizon.
-    
-    Args:
-        prediction: The raw predicted price value
-        current_price: The latest actual price
-        horizon_days: Number of days ahead for the prediction
-        
-    Returns:
-        A constrained price prediction within realistic bounds
-    """
-    # Define maximum daily percent change (can be adjusted based on domain knowledge)
-    # 5% for 1-day horizon, 3% for each additional day (diminishing effects)
     max_daily_pct_change = 0.05
     max_pct_change = max_daily_pct_change * min(horizon_days, 1) + 0.03 * max(0, horizon_days - 1)
-    
-    # Calculate absolute bounds
     max_prediction = current_price * (1 + max_pct_change)
     min_prediction = current_price * (1 - max_pct_change)
     
-    # Constrain the prediction to the bounds
+    # Set prediction to the bounds
     constrained_prediction = max(min_prediction, min(prediction, max_prediction))
-    
-    # Log if constraint was applied
-    if constrained_prediction != prediction:
-        logger.warning(
-            f"Constrained prediction for {horizon_days}-day horizon " +
-            f"from {prediction:.2f} to {constrained_prediction:.2f} " +
-            f"(current price: {current_price:.2f})"
-        )
-    
     return constrained_prediction
 
 # Define the function used by the Lambda layer in the saved model
@@ -178,89 +153,88 @@ async def startup_event():
         lstm_feature_names = []
         lstm_target_columns = []
 
-    # Load Vestas data
+    # Load Vestas data with better error handling
     try:
-        if VESTAS_DATA_FILE.exists():
-            # Identify date column correctly - first column is an unnamed date field
-            vestas_data = pd.read_csv(VESTAS_DATA_FILE, parse_dates=['Unnamed: 0'])
-            
-            # Rename the first column to 'date' for consistent naming
-            if 'Unnamed: 0' in vestas_data.columns:
-                vestas_data.rename(columns={'Unnamed: 0': 'date'}, inplace=True)
-                logger.info(f"Renamed first column to 'date'")
-            
-            # Ensure we have a date column
-            if 'Date' in vestas_data.columns:
-                vestas_data['date'] = pd.to_datetime(vestas_data['Date'], errors='coerce')
-                logger.info(f"Date range in data: {vestas_data['date'].min()} to {vestas_data['date'].max()}")
-            elif 'date' not in vestas_data.columns:
-                # If we don't have a date column, try to use the index
-                vestas_data['date'] = pd.to_datetime(vestas_data.index, errors='coerce')
-                logger.info(f"Created date from index, range: {vestas_data['date'].min()} to {vestas_data['date'].max()}")
-            
-            # Check if date column is correctly formatted
-            if 'date' in vestas_data.columns:
-                # Log date range
-                logger.info(f"Date range in data: {vestas_data['date'].min()} to {vestas_data['date'].max()}")
+        # Try loading vestas_daily.csv first (robust method)
+        if VESTAS_DAILY_DATA_FILE.exists():
+            try:
+                # Try to load with explicit date parsing
+                vestas_data = pd.read_csv(VESTAS_DAILY_DATA_FILE, parse_dates=[0], index_col=0)
+                vestas_data.index.name = 'date'
                 
-                # Handle bad dates by raising an error
-                if vestas_data['date'].isna().all() or (pd.notna(vestas_data['date'].min()) and vestas_data['date'].min().year < 1980):
-                    logger.error("Invalid dates detected in data")
-                    vestas_data = None
-            
-            # Rename columns if needed
-            if vestas_data is not None and 'Close' not in vestas_data.columns and 'close' in vestas_data.columns:
-                vestas_data.rename(columns={'close': 'Close', 'open': 'Open', 'high': 'High', 'low': 'Low', 'volume': 'Volume'}, inplace=True)
+                # Verify we have valid dates
+                if vestas_data.index.isna().any() or (vestas_data.index.year < 1980).any():
+                    logger.warning("Some invalid dates in daily data, trying to fix...")
+                    # Get valid rows
+                    valid_rows = ~vestas_data.index.isna() & (vestas_data.index.year >= 1980)
+                    if valid_rows.any():
+                        vestas_data = vestas_data.loc[valid_rows]
+                        logger.info(f"Filtered to {len(vestas_data)} valid rows")
+                    else:
+                        logger.error("No valid dates in daily data")
+                        vestas_data = None
                 
-            if vestas_data is not None:
-                logger.info(f"Vestas data loaded with shape: {vestas_data.shape}")
-                
-                # Debug: Log some dates to confirm they are correct
-                logger.info(f"First 5 dates: {vestas_data['date'].head(5).tolist()}")
-                logger.info(f"Last 5 dates: {vestas_data['date'].tail(5).tolist()}")
-            else:
-                logger.error("Failed to load valid Vestas data")
-        elif VESTAS_DAILY_DATA_FILE.exists():
-            # Try alternative file
-            vestas_data = pd.read_csv(VESTAS_DAILY_DATA_FILE)
-            # Ensure date column exists and is properly formatted
-            if 'Date' in vestas_data.columns:
-                # Try to convert the Date column to datetime
-                vestas_data['date'] = pd.to_datetime(vestas_data['Date'], errors='coerce')
-                logger.info(f"Date range in data: {vestas_data['date'].min()} to {vestas_data['date'].max()}")
-            elif 'date' in vestas_data.columns:
-                # If date column already exists, ensure it's datetime
-                vestas_data['date'] = pd.to_datetime(vestas_data['date'], errors='coerce')
-                logger.info(f"Date range in data: {vestas_data['date'].min()} to {vestas_data['date'].max()}")
-            else:
-                # Create date from index if no date column
-                vestas_data['date'] = pd.to_datetime(vestas_data.index, errors='coerce')
-                logger.info(f"Created date from index, range: {vestas_data['date'].min()} to {vestas_data['date'].max()}")
-            
-            # Handle bad dates by raising an error
-            if vestas_data['date'].isna().all() or (vestas_data['date'].min().year < 1980):
-                logger.error("Invalid dates detected in data")
+                if vestas_data is not None and len(vestas_data) > 0:
+                    # Rename columns to ensure consistent naming
+                    if 'Close' not in vestas_data.columns and 'close' in vestas_data.columns:
+                        vestas_data.rename(columns={'close': 'Close', 'open': 'Open', 'high': 'High', 'low': 'Low', 'volume': 'Volume'}, inplace=True)
+                    
+                    logger.info(f"Successfully loaded daily data with shape: {vestas_data.shape}")
+                    logger.info(f"Date range: {vestas_data.index.min()} to {vestas_data.index.max()}")
+                else:
+                    logger.error("Failed to load valid daily data")
+            except Exception as e:
+                logger.error(f"Error loading daily data: {str(e)}")
                 vestas_data = None
-                
-            # Rename columns if needed
-            if vestas_data is not None and 'Close' not in vestas_data.columns and 'close' in vestas_data.columns:
-                vestas_data.rename(columns={'close': 'Close', 'open': 'Open', 'high': 'High', 'low': 'Low', 'volume': 'Volume'}, inplace=True)
-                
-            if vestas_data is not None:
-                logger.info(f"Vestas daily data loaded with shape: {vestas_data.shape}")
-            else:
-                logger.error("Failed to load valid daily Vestas data")
         else:
-            logger.error(f"Vestas data file not found: {VESTAS_DATA_FILE} or {VESTAS_DAILY_DATA_FILE}")
+            logger.warning(f"Daily data file not found: {VESTAS_DAILY_DATA_FILE}")
             vestas_data = None
-            
-        # Try to load processed data if available
-        if not PROCESSED_FEATURES_FILE.exists():
-            logger.warning(f"Core feature file for predictions not found at startup: {PROCESSED_FEATURES_FILE}")
-
-        # If vestas_data is still None, log a critical error
+        
+        # Try using features data as fallback if daily data failed
+        if (vestas_data is None or len(vestas_data) == 0) and PROCESSED_FEATURES_FILE.exists():
+            try:
+                logger.info("Trying to use features file as fallback for price history")
+                
+                # Use the load_latest_data function for robust date parsing
+                feature_data = load_latest_data(required_features=lstm_feature_names[:5])  # Only need a few features
+                
+                if feature_data is not None and len(feature_data) > 0:
+                    # Extract key price columns for price history endpoint
+                    price_cols = ['close', 'open', 'high', 'low', 'volume']
+                    price_cols_cap = ['Close', 'Open', 'High', 'Low', 'Volume']
+                    
+                    vestas_data = pd.DataFrame(index=feature_data.index)
+                    
+                    # Try to find price columns in either lowercase or uppercase
+                    for i, col in enumerate(price_cols):
+                        if col in feature_data.columns:
+                            vestas_data[price_cols_cap[i]] = feature_data[col]
+                        elif price_cols_cap[i] in feature_data.columns:
+                            vestas_data[price_cols_cap[i]] = feature_data[price_cols_cap[i]]
+                    
+                    # Make sure we have at least Close/close column
+                    if 'Close' not in vestas_data.columns:
+                        logger.error("Could not find price columns in features file")
+                        vestas_data = None
+                    else:
+                        logger.info(f"Successfully created price history from features with shape: {vestas_data.shape}")
+                        
+                        # Save this as a new daily data file for future use
+                        try:
+                            vestas_data.to_csv(VESTAS_DAILY_DATA_FILE)
+                            logger.info(f"Saved extracted price data to {VESTAS_DAILY_DATA_FILE}")
+                        except Exception as e:
+                            logger.error(f"Failed to save extracted price data: {str(e)}")
+                else:
+                    logger.error("Failed to load features file as fallback")
+            except Exception as e:
+                logger.error(f"Error using features file as fallback: {str(e)}")
+        
+        # Log final data status
         if vestas_data is None:
             logger.critical("No data loaded for /price/history endpoint. API will return errors.")
+        else:
+            logger.info(f"Final data for price history endpoint: {vestas_data.shape} rows")
 
     except Exception as e:
         logger.error(f"Error loading Vestas data: {str(e)}")
@@ -447,41 +421,115 @@ async def get_price_history(days: Optional[int] = 365):
     """Get Vestas stock price history"""
     try:
         # Use existing data or return an error if not available
-        if vestas_data is not None and 'date' in vestas_data.columns and not vestas_data['date'].isna().all():
+        if vestas_data is not None and len(vestas_data) > 0:
             logger.info("Using existing data for API response")
             # Deep copy to avoid modifying original data
             df = vestas_data.copy()
             
-            # Ensure dates are sorted
-            df = df.sort_values('date')
-            
-            # Filter to the desired number of days
-            if len(df) > days:
-                df = df.tail(days)
+            # Ensure dates are sorted if we're working with a DataFrame with a DatetimeIndex
+            if isinstance(df.index, pd.DatetimeIndex):
+                df = df.sort_index()
+                # Filter to the desired number of days
+                if len(df) > days:
+                    df = df.tail(days)
+                    
+                # Format data for response
+                price_history = []
                 
-            # Format data for response
-            price_history = []
-            for _, row in df.iterrows():
-                try:
-                    # Convert date to string
-                    date_str = row['date'].strftime("%Y-%m-%d") if isinstance(row['date'], pd.Timestamp) else str(row['date'])
+                for idx, row in df.iterrows():
+                    try:
+                        # Convert date to string from the index
+                        date_str = idx.strftime("%Y-%m-%d") if isinstance(idx, pd.Timestamp) else str(idx)
+                        
+                        data_point = {
+                            "date": date_str,
+                            "price": float(row['Close']) if 'Close' in row and pd.notna(row['Close']) else float(row['close']) if 'close' in row and pd.notna(row['close']) else None,
+                            "open": float(row['Open']) if 'Open' in row and pd.notna(row['Open']) else float(row['open']) if 'open' in row and pd.notna(row['open']) else None,
+                            "high": float(row['High']) if 'High' in row and pd.notna(row['High']) else float(row['high']) if 'high' in row and pd.notna(row['high']) else None,
+                            "low": float(row['Low']) if 'Low' in row and pd.notna(row['Low']) else float(row['low']) if 'low' in row and pd.notna(row['low']) else None,
+                            "volume": int(row['Volume']) if 'Volume' in row and pd.notna(row['Volume']) else int(row['volume']) if 'volume' in row and pd.notna(row['volume']) else None
+                        }
+                        price_history.append(data_point)
+                    except Exception as e:
+                        logger.error(f"Error processing row: {e}")
+                        continue
+                
+                logger.info(f"Returning {len(price_history)} price history records")
+                return {"data": price_history}
+            
+            # Legacy support for DataFrame with a 'date' column
+            elif 'date' in df.columns:
+                # Ensure dates are sorted
+                df = df.sort_values('date')
+                
+                # Filter to the desired number of days
+                if len(df) > days:
+                    df = df.tail(days)
                     
-                    data_point = {
-                        "date": date_str,
-                        "price": float(row['Close']) if 'Close' in row and pd.notna(row['Close']) else float(row['close']) if 'close' in row and pd.notna(row['close']) else None,
-                        "open": float(row['Open']) if 'Open' in row and pd.notna(row['Open']) else float(row['open']) if 'open' in row and pd.notna(row['open']) else None,
-                        "high": float(row['High']) if 'High' in row and pd.notna(row['High']) else float(row['high']) if 'high' in row and pd.notna(row['high']) else None,
-                        "low": float(row['Low']) if 'Low' in row and pd.notna(row['Low']) else float(row['low']) if 'low' in row and pd.notna(row['low']) else None,
-                        "volume": int(row['Volume']) if 'Volume' in row and pd.notna(row['Volume']) else int(row['volume']) if 'volume' in row and pd.notna(row['volume']) else None
-                    }
-                    price_history.append(data_point)
-                except Exception as e:
-                    logger.error(f"Error processing row: {e}")
-                    continue
-                    
-            return {"data": price_history}
+                # Format data for response
+                price_history = []
+                for _, row in df.iterrows():
+                    try:
+                        # Convert date to string
+                        date_str = row['date'].strftime("%Y-%m-%d") if isinstance(row['date'], pd.Timestamp) else str(row['date'])
+                        
+                        data_point = {
+                            "date": date_str,
+                            "price": float(row['Close']) if 'Close' in row and pd.notna(row['Close']) else float(row['close']) if 'close' in row and pd.notna(row['close']) else None,
+                            "open": float(row['Open']) if 'Open' in row and pd.notna(row['Open']) else float(row['open']) if 'open' in row and pd.notna(row['open']) else None,
+                            "high": float(row['High']) if 'High' in row and pd.notna(row['High']) else float(row['high']) if 'high' in row and pd.notna(row['high']) else None,
+                            "low": float(row['Low']) if 'Low' in row and pd.notna(row['Low']) else float(row['low']) if 'low' in row and pd.notna(row['low']) else None,
+                            "volume": int(row['Volume']) if 'Volume' in row and pd.notna(row['Volume']) else int(row['volume']) if 'volume' in row and pd.notna(row['volume']) else None
+                        }
+                        price_history.append(data_point)
+                    except Exception as e:
+                        logger.error(f"Error processing row: {e}")
+                        continue
+                
+                logger.info(f"Returning {len(price_history)} price history records")
+                return {"data": price_history}
+            else:
+                logger.error("Data format not recognized - no date column or DatetimeIndex")
+                raise HTTPException(status_code=500, detail="Data format not recognized")
         else:
             logger.error("No valid data found for price history")
+            
+            # Try to load data directly using the more robust load_latest_data function
+            try:
+                logger.info("Attempting to load data directly from features file as fallback")
+                required_features = ['close', 'open', 'high', 'low', 'volume']
+                fallback_data = load_latest_data(required_features=required_features)
+                
+                if fallback_data is not None and len(fallback_data) > 0:
+                    # Format data for response
+                    price_history = []
+                    fallback_data = fallback_data.sort_index().tail(days)
+                    
+                    for idx, row in fallback_data.iterrows():
+                        try:
+                            # Convert date to string from the index
+                            date_str = idx.strftime("%Y-%m-%d") if isinstance(idx, pd.Timestamp) else str(idx)
+                            
+                            data_point = {
+                                "date": date_str,
+                                "price": float(row['close']) if 'close' in row and pd.notna(row['close']) else None,
+                                "open": float(row['open']) if 'open' in row and pd.notna(row['open']) else None,
+                                "high": float(row['high']) if 'high' in row and pd.notna(row['high']) else None,
+                                "low": float(row['low']) if 'low' in row and pd.notna(row['low']) else None,
+                                "volume": int(row['volume']) if 'volume' in row and pd.notna(row['volume']) else None
+                            }
+                            price_history.append(data_point)
+                        except Exception as e:
+                            logger.error(f"Error processing fallback row: {e}")
+                            continue
+                    
+                    if price_history:
+                        logger.info(f"Returning {len(price_history)} price history records from direct load")
+                        return {"data": price_history}
+            except Exception as e:
+                logger.error(f"Failed to load data directly: {e}")
+            
+            # If all else fails, raise an exception
             raise HTTPException(status_code=500, detail="No valid price history data available")
     except Exception as e:
         logger.error(f"Error generating price history: {str(e)}")
@@ -666,8 +714,6 @@ async def predict_price_lstm(days_ahead: Optional[int] = None):
                 else:
                     # Model predicts price directly
                     price_prediction = prediction_denorm
-                
-                # Apply constraint to get realistic prediction
                 price_prediction = constrain_price_prediction(price_prediction, last_price, horizon)
                     
                 # Calculate future date based on trading days, not calendar days
@@ -752,8 +798,6 @@ async def predict_price_lstm(days_ahead: Optional[int] = None):
                     else:
                         # Model predicts price directly
                         price_prediction = prediction_denorm
-                        
-                    # Apply constraint to get realistic prediction
                     price_prediction = constrain_price_prediction(price_prediction, last_price, horizon)
                         
                     # Calculate future date based on trading days, not calendar days
@@ -802,8 +846,26 @@ def load_latest_data(required_features: List[str]):
         return None
 
     try:
-        df = pd.read_csv(source_path)
-        logger.info(f"Successfully loaded feature data from: {source_path}. Shape: {df.shape}")
+        # Try different approaches to read the file with proper date parsing
+        try:
+            # First attempt: Standard CSV read with default options
+            df = pd.read_csv(source_path)
+            logger.info(f"Successfully loaded feature data from: {source_path}. Shape: {df.shape}")
+        except Exception as e:
+            logger.error(f"Standard read of {source_path} failed: {e}")
+            try:
+                # Second attempt: Try with explicit parameters
+                df = pd.read_csv(source_path, parse_dates=['date'], infer_datetime_format=True)
+                logger.info(f"Loaded data with explicit date parsing. Shape: {df.shape}")
+            except Exception as e2:
+                logger.error(f"Explicit date parsing failed: {e2}")
+                try:
+                    # Third attempt: Try reading first using string types, then convert date manually
+                    df = pd.read_csv(source_path, dtype={'date': str})
+                    logger.info(f"Loaded data with string date column. Shape: {df.shape}")
+                except Exception as e3:
+                    logger.error(f"All data loading attempts failed: {e3}")
+                    return None
     except Exception as e:
         logger.error(f"Error loading feature file {source_path}: {e}")
         return None
@@ -813,46 +875,64 @@ def load_latest_data(required_features: List[str]):
         logger.error("Dataframe is None after attempting to load file.")
         return None
 
-    # Ensure date column is datetime and set as index
+    # Try harder to ensure date column is datetime and set as index
     date_col_found = False
-    if 'Date' in df.columns:
-        try:
-            df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
-            # Log some date values for debugging
-            logger.info(f"Date sample values: {df['Date'].head(3).tolist()}")
-            if df['Date'].isna().any():
-                logger.warning(f"Some dates in 'Date' column could not be parsed. Found {df['Date'].isna().sum()} NaN dates.")
-                df = df.dropna(subset=['Date'])
-            df = df.set_index('Date')
-            date_col_found = True
-        except Exception as e:
-            logger.error(f"Error converting 'Date' column to datetime: {e}")
-    elif 'date' in df.columns:
-        try:
-            df['date'] = pd.to_datetime(df['date'], errors='coerce')
-            # Log some date values for debugging
-            logger.info(f"date sample values: {df['date'].head(3).tolist()}")
-            if df['date'].isna().any():
-                logger.warning(f"Some dates in 'date' column could not be parsed. Found {df['date'].isna().sum()} NaN dates.")
-                df = df.dropna(subset=['date'])
-            df = df.set_index('date')
-            date_col_found = True
-        except Exception as e:
-            logger.error(f"Error converting 'date' column to datetime: {e}")
-
-    if not date_col_found:
-        logger.warning("No 'Date' or 'date' column found. Trying to use index if it's DatetimeIndex.")
-        if not isinstance(df.index, pd.DatetimeIndex):
+    
+    # First look for standard date columns
+    date_columns = ['Date', 'date', 'datetime', 'time', 'timestamp']
+    
+    for date_col in date_columns:
+        if date_col in df.columns:
             try:
-                # Try to convert index to datetime
-                df.index = pd.to_datetime(df.index, errors='coerce')
-                if df.index.isna().any():
-                    logger.warning(f"Some values in index could not be parsed as dates. Found {df.index.isna().sum()} NaN dates.")
-                    df = df.dropna()
-                logger.info(f"Converted index to DatetimeIndex. Sample dates: {df.index[:3].tolist()}")
+                # Try various date formats
+                try:
+                    df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
+                except:
+                    # Try ISO format explicitly
+                    df[date_col] = pd.to_datetime(df[date_col], format='%Y-%m-%d', errors='coerce')
+                
+                # Verify successful date conversion
+                logger.info(f"{date_col} column converted to datetime. Sample values: {df[date_col].head(3).tolist()}")
+                
+                # Fix bad dates by looking for invalid values and filtering
+                invalid_dates = df[date_col].isna() | (df[date_col].dt.year < 1980)
+                if invalid_dates.any():
+                    logger.warning(f"Removing {invalid_dates.sum()} rows with invalid dates")
+                    df = df[~invalid_dates]
+                
+                df = df.set_index(date_col)
+                date_col_found = True
+                logger.info(f"Set {date_col} as index. Date range: {df.index.min()} to {df.index.max()}")
+                break
             except Exception as e:
-                logger.error(f"Error converting index to DatetimeIndex: {e}")
-                return None  # Cannot proceed without proper time ordering
+                logger.error(f"Error converting '{date_col}' column to datetime: {e}")
+    
+    # If no date column, try using the first column as a date
+    if not date_col_found and len(df.columns) > 0:
+        first_col = df.columns[0]
+        try:
+            logger.info(f"Trying to use first column '{first_col}' as date")
+            df[first_col] = pd.to_datetime(df[first_col], errors='coerce')
+            
+            # Filter invalid dates
+            invalid_dates = df[first_col].isna() | (df[first_col].dt.year < 1980)
+            if invalid_dates.any():
+                logger.warning(f"Removing {invalid_dates.sum()} rows with invalid dates from first column")
+                df = df[~invalid_dates]
+                
+            df = df.set_index(first_col)
+            date_col_found = True
+            logger.info(f"Used first column as index. Date range: {df.index.min()} to {df.index.max()}")
+        except Exception as e:
+            logger.error(f"Error using first column as date: {e}")
+
+    # Last resort: create an artificial date index
+    if not date_col_found:
+        logger.warning("No date column found. Creating artificial date index.")
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=len(df))
+        df.index = pd.date_range(start=start_date, periods=len(df))
+        logger.info(f"Created artificial date index. Range: {df.index.min()} to {df.index.max()}")
 
     # Sort by date
     df = df.sort_index()
@@ -872,7 +952,6 @@ def load_latest_data(required_features: List[str]):
               df[col] = df[col].replace([np.inf, -np.inf], np.nan)
          if df[col].isna().any():
               nan_count = df[col].isna().sum()
-              # --- MODIFIED NaN HANDLING ---
               if col in lstm_feature_medians:
                   median_val = lstm_feature_medians[col]
                   logger.warning(f"Feature '{col}' contains {nan_count} NaN values. Filling with PRELOADED median ({median_val}).")
@@ -882,7 +961,6 @@ def load_latest_data(required_features: List[str]):
                   fallback_median = df[col].median()
                   logger.error(f"Feature '{col}' contains {nan_count} NaN values, BUT median not found in preloaded medians! Using fallback median ({fallback_median}).")
                   df[col] = df[col].fillna(fallback_median)
-              # --- END MODIFIED NaN HANDLING ---
 
     logger.info(f"Data loaded successfully from {source_path}. Final shape for prediction preparation: {df.shape}")
     return df
