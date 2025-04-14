@@ -716,7 +716,6 @@ def evaluate_multi_horizon_model(model, X_test, y_test_dict, horizon_keys, scale
             y_pred_denorm = horizon_scaler.inverse_transform(y_pred)
             y_true_denorm = horizon_scaler.inverse_transform(y_true)
             
-            # --- NEW CODE: Convert percentage change back to price values ---
             if is_percent_change_model:
                 # The predicted percentage change needs to be converted back to a price
                 # Note: If we forecast many days ahead, we need to use the correct base price
@@ -743,7 +742,6 @@ def evaluate_multi_horizon_model(model, X_test, y_test_dict, horizon_keys, scale
                 y_true_denorm = actual_prices.reshape(-1, 1)
                 
                 logging.info(f"Converted {h}-horizon back to prices: Base mean={np.mean(test_prices[:min_len]):.2f}, Forecast mean={np.mean(predicted_prices):.2f}")
-            # --- END OF NEW CODE ---
         else:
             # If no scaler, use as is
             y_pred_denorm = y_pred
