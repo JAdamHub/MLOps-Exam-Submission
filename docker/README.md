@@ -39,7 +39,7 @@ The application is containerized using Docker with the following components:
    docker-compose down
    ```
 
-## API Access
+## API Access 
 
 Once running, the API can be accessed at:
 
