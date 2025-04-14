@@ -716,7 +716,6 @@ def evaluate_multi_horizon_model(model, X_test, y_test_dict, horizon_keys, scale
             y_pred_denorm = horizon_scaler.inverse_transform(y_pred)
             y_true_denorm = horizon_scaler.inverse_transform(y_true)
             
-            # --- NEW CODE: Convert percentage change back to price values ---
             if is_percent_change_model:
                 # The predicted percentage change needs to be converted back to a price
                 # Note: If we forecast many days ahead, we need to use the correct base price
@@ -743,7 +742,6 @@ def evaluate_multi_horizon_model(model, X_test, y_test_dict, horizon_keys, scale
                 y_true_denorm = actual_prices.reshape(-1, 1)
                 
                 logging.info(f"Converted {h}-horizon back to prices: Base mean={np.mean(test_prices[:min_len]):.2f}, Forecast mean={np.mean(predicted_prices):.2f}")
-            # --- END OF NEW CODE ---
         else:
             # If no scaler, use as is
             y_pred_denorm = y_pred
@@ -1197,7 +1195,6 @@ def main():
         medians_path = MODELS_DIR / 'lstm_feature_medians.joblib'
         joblib.dump(feature_medians, medians_path)
         logging.info(f"Feature medians saved to {medians_path}")
-        # ---> DONE WITH MEDIANS <---
 
         # Scale targets (one scaler for each target)
         target_scalers = {}
@@ -1269,11 +1266,11 @@ def main():
         model.save(models_dir / 'lstm_multi_horizon_model.keras')
         logging.info("Model saved as 'lstm_multi_horizon_model.keras'")
         
-        # Save feature scaler
+        # save feature scaler
         joblib.dump(feature_scaler, models_dir / 'lstm_feature_scaler.joblib')
         logging.info("Feature scaler saved as 'lstm_feature_scaler.joblib'")
         
-        # Save target scalers
+        # save target scalers
         joblib.dump(target_scalers, models_dir / 'lstm_target_scalers.joblib')
         logging.info("Target scalers saved as 'lstm_target_scalers.joblib'")
         
@@ -1285,11 +1282,9 @@ def main():
         joblib.dump(seq_length, models_dir / 'lstm_sequence_length.joblib')
         logging.info("Sequence length saved as 'lstm_sequence_length.joblib'")
         
-        # ---> SAVE MEDIAN FILENAME <---
-        # Save feature medians (added here for consistency)
+        # save feature medians
         joblib.dump(feature_medians, models_dir / 'lstm_feature_medians.joblib')
         logging.info("Feature medians saved as 'lstm_feature_medians.joblib'")
-        # ---> DONE WITH MEDIAN FILENAME <---
 
         # Save target columns
         joblib.dump(target_columns, models_dir / 'lstm_target_columns.joblib')

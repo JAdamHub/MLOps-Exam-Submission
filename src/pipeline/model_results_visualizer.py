@@ -12,7 +12,6 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('pipeline.log'),
         logging.StreamHandler()
     ]
 )
@@ -289,7 +288,7 @@ class ModelResultsVisualizer:
         except Exception as e:
             logger.error(f"Error generating report: {str(e)}", exc_info=True)
 
-# Tilføj den manglende main() funktion, der bliver kaldt fra main.py
+# main function
 def main():
     """Entry point for the pipeline integration"""
     logger.info("Starting model metrics visualization...")

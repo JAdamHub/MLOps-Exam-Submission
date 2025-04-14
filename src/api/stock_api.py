@@ -83,14 +83,14 @@ MODELS_DIR = BASE_DIR / "models"
 DATA_DIR = BASE_DIR / "data"
 
 # Data paths
-VESTAS_DATA_FILE = DATA_DIR / "raw" / "stocks" / "vestas_macro_combined_trading_days.csv"  # Ændret til den kombinerede fil
-VESTAS_DAILY_DATA_FILE = DATA_DIR / "raw" / "stocks" / "vestas_daily.csv"  # Alternativ fil
+VESTAS_DATA_FILE = DATA_DIR / "raw" / "stocks" / "vestas_macro_combined_trading_days.csv"  # Changed to combined file
+VESTAS_DAILY_DATA_FILE = DATA_DIR / "raw" / "stocks" / "vestas_daily.csv"  # Alternative file
 # Define the primary feature file path used for training and prediction
 PROCESSED_FEATURES_FILE = DATA_DIR / "features" / "vestas_features_trading_days.csv" # Match training script path
 
 # LSTM model paths
 LSTM_MODEL_PATH = MODELS_DIR / "lstm_model_checkpoint.keras"
-LSTM_ALT_MODEL_PATH = MODELS_DIR / "lstm_multi_horizon_model.keras"  # Alternativ model
+LSTM_ALT_MODEL_PATH = MODELS_DIR / "lstm_multi_horizon_model.keras" 
 LSTM_FEATURE_NAMES_FILE = MODELS_DIR / "lstm_feature_names.joblib"
 LSTM_TARGET_SCALERS_FILE = MODELS_DIR / "lstm_target_scalers.joblib"
 LSTM_FEATURE_SCALER_FILE = MODELS_DIR / "lstm_feature_scaler.joblib"
@@ -104,7 +104,7 @@ lstm_model = None
 lstm_feature_names = []
 lstm_feature_scaler = None
 lstm_target_scalers = {}
-lstm_sequence_length = 30  # Default værdi, overskrives ved indlæsning
+lstm_sequence_length = 30  # Default value, will be overwritten during loading
 lstm_target_columns = []
 lstm_feature_medians = {}
 
@@ -128,7 +128,6 @@ async def startup_event():
     """Load models and data on startup"""
     global vestas_data, lstm_model, lstm_feature_names, lstm_feature_scaler, lstm_target_scalers, lstm_sequence_length, lstm_target_columns, lstm_feature_medians
     
-    # --- Load metadata first (needed for model potentially) ---
     try:
         # Load feature names and validate
         if LSTM_FEATURE_NAMES_FILE.exists():
@@ -182,44 +181,45 @@ async def startup_event():
     # Load Vestas data
     try:
         if VESTAS_DATA_FILE.exists():
-            # Identificer datokolonnen korrekt - første kolonne er en ikke-navngivet datofelt
+            # Identify date column correctly - first column is an unnamed date field
             vestas_data = pd.read_csv(VESTAS_DATA_FILE, parse_dates=['Unnamed: 0'])
             
-            # Omdøb den første kolonne til 'date' for konsistent navngivning
+            # Rename the first column to 'date' for consistent naming
             if 'Unnamed: 0' in vestas_data.columns:
                 vestas_data.rename(columns={'Unnamed: 0': 'date'}, inplace=True)
                 logger.info(f"Renamed first column to 'date'")
             
-            # Sørg for at vi har en dato-kolonne
+            # Ensure we have a date column
             if 'Date' in vestas_data.columns:
                 vestas_data['date'] = pd.to_datetime(vestas_data['Date'], errors='coerce')
                 logger.info(f"Date range in data: {vestas_data['date'].min()} to {vestas_data['date'].max()}")
             elif 'date' not in vestas_data.columns:
-                # Hvis vi ikke har en dato-kolonne, prøv at bruge indekset
+                # If we don't have a date column, try to use the index
                 vestas_data['date'] = pd.to_datetime(vestas_data.index, errors='coerce')
                 logger.info(f"Created date from index, range: {vestas_data['date'].min()} to {vestas_data['date'].max()}")
             
-            # Tjek om datoekolonnen er korrekt formateret
+            # Check if date column is correctly formatted
             if 'date' in vestas_data.columns:
-                # Log datointervallet
+                # Log date range
                 logger.info(f"Date range in data: {vestas_data['date'].min()} to {vestas_data['date'].max()}")
                 
-                # Handle bad dates by creating a dummy date range if needed
+                # Handle bad dates by raising an error
                 if vestas_data['date'].isna().all() or (pd.notna(vestas_data['date'].min()) and vestas_data['date'].min().year < 1980):
-                    logger.warning("Invalid dates detected, creating synthetic date range")
-                    end_date = datetime.now()
-                    start_date = end_date - timedelta(days=len(vestas_data))
-                    vestas_data['date'] = pd.date_range(start=start_date, periods=len(vestas_data))
+                    logger.error("Invalid dates detected in data")
+                    vestas_data = None
             
             # Rename columns if needed
-            if 'Close' not in vestas_data.columns and 'close' in vestas_data.columns:
+            if vestas_data is not None and 'Close' not in vestas_data.columns and 'close' in vestas_data.columns:
                 vestas_data.rename(columns={'close': 'Close', 'open': 'Open', 'high': 'High', 'low': 'Low', 'volume': 'Volume'}, inplace=True)
                 
-            logger.info(f"Vestas data loaded with shape: {vestas_data.shape}")
-            
-            # Debug: Log nogle af datoerne for at bekræfte at de er korrekte
-            logger.info(f"First 5 dates: {vestas_data['date'].head(5).tolist()}")
-            logger.info(f"Last 5 dates: {vestas_data['date'].tail(5).tolist()}")
+            if vestas_data is not None:
+                logger.info(f"Vestas data loaded with shape: {vestas_data.shape}")
+                
+                # Debug: Log some dates to confirm they are correct
+                logger.info(f"First 5 dates: {vestas_data['date'].head(5).tolist()}")
+                logger.info(f"Last 5 dates: {vestas_data['date'].tail(5).tolist()}")
+            else:
+                logger.error("Failed to load valid Vestas data")
         elif VESTAS_DAILY_DATA_FILE.exists():
             # Try alternative file
             vestas_data = pd.read_csv(VESTAS_DAILY_DATA_FILE)
@@ -237,94 +237,35 @@ async def startup_event():
                 vestas_data['date'] = pd.to_datetime(vestas_data.index, errors='coerce')
                 logger.info(f"Created date from index, range: {vestas_data['date'].min()} to {vestas_data['date'].max()}")
             
-            # Handle bad dates by creating a dummy date range if needed
+            # Handle bad dates by raising an error
             if vestas_data['date'].isna().all() or (vestas_data['date'].min().year < 1980):
-                logger.warning("Invalid dates detected, creating synthetic date range")
-                end_date = datetime.now()
-                start_date = end_date - timedelta(days=len(vestas_data))
-                vestas_data['date'] = pd.date_range(start=start_date, periods=len(vestas_data))
+                logger.error("Invalid dates detected in data")
+                vestas_data = None
                 
             # Rename columns if needed
-            if 'Close' not in vestas_data.columns and 'close' in vestas_data.columns:
+            if vestas_data is not None and 'Close' not in vestas_data.columns and 'close' in vestas_data.columns:
                 vestas_data.rename(columns={'close': 'Close', 'open': 'Open', 'high': 'High', 'low': 'Low', 'volume': 'Volume'}, inplace=True)
                 
-            logger.info(f"Vestas daily data loaded with shape: {vestas_data.shape}")
+            if vestas_data is not None:
+                logger.info(f"Vestas daily data loaded with shape: {vestas_data.shape}")
+            else:
+                logger.error("Failed to load valid daily Vestas data")
         else:
             logger.error(f"Vestas data file not found: {VESTAS_DATA_FILE} or {VESTAS_DAILY_DATA_FILE}")
+            vestas_data = None
             
-        # Try to load processed data if available (This part might be less relevant now, focus is on PROCESSED_FEATURES_FILE)
+        # Try to load processed data if available
         if not PROCESSED_FEATURES_FILE.exists():
             logger.warning(f"Core feature file for predictions not found at startup: {PROCESSED_FEATURES_FILE}")
 
-        # If vestas_data is still None, we might log a warning, but prediction relies on PROCESSED_FEATURES_FILE
-        # This initial data loading primarily serves the /price/history endpoint.
-        # The /predict/lstm endpoint uses load_latest_data which specifically loads PROCESSED_FEATURES_FILE.
+        # If vestas_data is still None, log a critical error
         if vestas_data is None:
-            logger.warning("No raw/daily data loaded for /price/history endpoint. It might rely on synthetic data.")
+            logger.critical("No data loaded for /price/history endpoint. API will return errors.")
 
-        # Remove merging logic based on intermediate file during startup
-        '''
-        if PROCESSED_FEATURES_FILE.exists():
-            processed_data = pd.read_csv(PROCESSED_FEATURES_FILE)
-            if not vestas_data is None:
-                # Extract date and merge with original data
-                if 'Date' in processed_data.columns:
-                    processed_data['date'] = pd.to_datetime(processed_data['Date'], errors='coerce')
-                    vestas_data = pd.merge(vestas_data, processed_data, on='date', how='outer')
-                logger.info(f"Processed features loaded and merged, new shape: {vestas_data.shape}")
-            else:
-                vestas_data = processed_data
-                vestas_data['date'] = pd.to_datetime(vestas_data['Date'] if 'Date' in vestas_data.columns else vestas_data.index, errors='coerce')
-                # Handle bad dates by creating a dummy date range if needed
-                if vestas_data['date'].isna().all() or (vestas_data['date'].min().year < 1980):
-                    logger.warning("Invalid dates detected in processed data, creating synthetic date range")
-                    end_date = datetime.now()
-                    start_date = end_date - timedelta(days=len(vestas_data))
-                    vestas_data['date'] = pd.date_range(start=start_date, periods=len(vestas_data))
-                logger.info(f"Using processed features as primary data, shape: {vestas_data.shape}")
-        '''
-
-        # Generate synthetic data if no valid data is loaded for /price/history
-        if vestas_data is None or len(vestas_data) == 0:
-            logger.warning("No valid data loaded, generating synthetic dataset")
-            end_date = datetime.now()
-            start_date = end_date - timedelta(days=365)  # One year of data
-            dates = pd.date_range(start=start_date, end=end_date)
-            
-            # Create synthetic price data
-            base_price = 150
-            prices = np.linspace(base_price, base_price*1.2, len(dates)) + np.random.normal(0, 5, len(dates))
-            
-            vestas_data = pd.DataFrame({
-                'date': dates,
-                'Close': prices,
-                'Open': prices * 0.99,
-                'High': prices * 1.01,
-                'Low': prices * 0.98,
-                'Volume': np.random.randint(10000, 50000, len(dates))
-            })
-            logger.info(f"Synthetic data generated with shape: {vestas_data.shape}")
     except Exception as e:
         logger.error(f"Error loading Vestas data: {str(e)}")
-        # Generate emergency synthetic data
-        logger.warning("Generating emergency synthetic data due to data loading error")
-        end_date = datetime.now()
-        start_date = end_date - timedelta(days=365)  # One year of data
-        dates = pd.date_range(start=start_date, end=end_date)
-        
-        # Create synthetic price data
-        base_price = 150
-        prices = np.linspace(base_price, base_price*1.2, len(dates)) + np.random.normal(0, 5, len(dates))
-        
-        vestas_data = pd.DataFrame({
-            'date': dates,
-            'Close': prices,
-            'Open': prices * 0.99,
-            'High': prices * 1.01,
-            'Low': prices * 0.98,
-            'Volume': np.random.randint(10000, 50000, len(dates))
-        })
-        logger.info(f"Emergency synthetic data generated with shape: {vestas_data.shape}")
+        vestas_data = None
+        logger.critical("No data loaded for /price/history endpoint. API will return errors.")
 
     # Load LSTM model
     try:
@@ -505,16 +446,16 @@ async def health_check():
 async def get_price_history(days: Optional[int] = 365):
     """Get Vestas stock price history"""
     try:
-        # Brug enten de eksisterende data eller generer nye hvis nødvendigt
+        # Use existing data or return an error if not available
         if vestas_data is not None and 'date' in vestas_data.columns and not vestas_data['date'].isna().all():
             logger.info("Using existing data for API response")
-            # Deep copy for at undgå at ændre originale data
+            # Deep copy to avoid modifying original data
             df = vestas_data.copy()
             
-            # Sørg for at datoer er sorteret
+            # Ensure dates are sorted
             df = df.sort_values('date')
             
-            # Filtrer til det ønskede antal dage
+            # Filter to the desired number of days
             if len(df) > days:
                 df = df.tail(days)
                 
@@ -522,7 +463,7 @@ async def get_price_history(days: Optional[int] = 365):
             price_history = []
             for _, row in df.iterrows():
                 try:
-                    # Konverter dato til string
+                    # Convert date to string
                     date_str = row['date'].strftime("%Y-%m-%d") if isinstance(row['date'], pd.Timestamp) else str(row['date'])
                     
                     data_point = {
@@ -540,49 +481,8 @@ async def get_price_history(days: Optional[int] = 365):
                     
             return {"data": price_history}
         else:
-            logger.warning("No valid data found, generating synthetic data")
-            # Generer helt nye syntetiske data
-            end_date = datetime.now()
-            start_date = end_date - timedelta(days=days)
-            dates = pd.date_range(start=start_date, end=end_date)
-            
-            # Create synthetic price data with some realism
-            base_price = 150
-            # Add randomness with a slight upward trend
-            noise = np.random.normal(0, 5, len(dates))
-            trend = np.linspace(0, 10, len(dates))
-            seasonal = 5 * np.sin(np.linspace(0, 4*np.pi, len(dates)))  # seasonal pattern
-            
-            prices = base_price + trend + seasonal + noise
-            
-            # Create synthetic dataframe with valid dates
-            df = pd.DataFrame({
-                'date': dates,
-                'Close': prices,
-                'Open': prices * 0.99 + np.random.normal(0, 1, len(dates)),
-                'High': prices * 1.02 + np.random.normal(0, 1, len(dates)),
-                'Low': prices * 0.98 + np.random.normal(0, 1, len(dates)),
-                'Volume': np.random.randint(100000, 500000, len(dates))
-            })
-            
-            # Take only the requested number of days
-            if len(df) > days:
-                df = df.tail(days)
-            
-            # Format data for response
-            price_history = []
-            for _, row in df.iterrows():
-                data_point = {
-                    "date": row['date'].strftime("%Y-%m-%d"),
-                    "price": float(row['Close']),
-                    "open": float(row['Open']),
-                    "high": float(row['High']),
-                    "low": float(row['Low']),
-                    "volume": int(row['Volume'])
-                }
-                price_history.append(data_point)
-            
-            return {"data": price_history}
+            logger.error("No valid data found for price history")
+            raise HTTPException(status_code=500, detail="No valid price history data available")
     except Exception as e:
         logger.error(f"Error generating price history: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error generating price data: {str(e)}")
@@ -626,43 +526,8 @@ async def predict_price_lstm(days_ahead: Optional[int] = None):
              logger.error("Failed to load data for prediction.")
              raise HTTPException(status_code=500, detail="Could not load data for prediction.")
         if len(df) < lstm_sequence_length:
-            logger.warning(f"Not enough data available ({len(df)} rows) for sequence length {lstm_sequence_length}. Required at least {lstm_sequence_length} rows.")
-            # For demo purposes, return simulated values if data is not available
-            # (Keep existing simulation logic for now)
-            logger.warning("Returning simulated values due to insufficient data.")
-            results = {}
-            
-            # Get current date in proper format
-            current_date = datetime.now().strftime('%Y-%m-%d')
-            
-            # Use current price from user, or a reasonable default if not available
-            current_price = 11.43  # Current price from user
-            
-            for horizon in [1, 3, 7]:
-                if not return_all and horizon != days_ahead:
-                    continue
-                    
-                # Ensure future date is properly formatted using trading days
-                future_date = get_next_trading_days(datetime.now(), horizon).strftime('%Y-%m-%d')
-                
-                # Generate a more realistic simulated value
-                simulated_price = current_price * (1 + 0.01 * horizon)  # 1% increase per day
-                simulated_price = constrain_price_prediction(simulated_price, current_price, horizon)
-                
-                results[str(horizon)] = {
-                    "predicted_price": float(round(simulated_price, 2)),
-                    "prediction_date": future_date,
-                    "horizon_days": horizon,
-                    "trading_days": horizon,  # Clarify that this is trading days
-                    "simulated": True
-                }
-            return {
-                "vestas_predictions": results,
-                "last_price": current_price,
-                "last_price_date": current_date,
-                "model_type": "LSTM (Multi-horizon)",
-                "note": "Using simulated values due to insufficient data"
-            }
+            logger.error(f"Not enough data available ({len(df)} rows) for sequence length {lstm_sequence_length}. Required at least {lstm_sequence_length} rows.")
+            raise HTTPException(status_code=500, detail=f"Insufficient data for prediction. Need at least {lstm_sequence_length} rows, but only have {len(df)}.")
         
         # Prepare features
         logger.info(f"Preparing features from data with shape: {df.shape}")
@@ -704,39 +569,7 @@ async def predict_price_lstm(days_ahead: Optional[int] = None):
 
         except Exception as e:
             logger.error(f"Error during model prediction: {str(e)}")
-            # (Keep existing simulation logic for error case)
-            logger.warning("Returning simulated values due to model prediction error.")
-            results = {}
-            current_date = datetime.now().strftime('%Y-%m-%d')
-            
-            # Generate a more realistic simulated value
-            current_price = 11.43  # Hardcoded current price as fallback
-            
-            for horizon in [1, 3, 7]:
-                if not return_all and horizon != days_ahead:
-                    continue
-                    
-                # Ensure future date is properly formatted using trading days
-                future_date = get_next_trading_days(datetime.now(), horizon).strftime('%Y-%m-%d')
-                
-                # Generate a more realistic simulated value
-                simulated_price = current_price * (1 + 0.01 * horizon)  # 1% increase per day
-                simulated_price = constrain_price_prediction(simulated_price, current_price, horizon)
-                
-                results[str(horizon)] = {
-                    "predicted_price": float(round(simulated_price, 2)),
-                    "prediction_date": future_date,
-                    "horizon_days": horizon,
-                    "trading_days": horizon,  # Clarify that this is trading days
-                    "simulated": True
-                }
-            return {
-                "vestas_predictions": results,
-                "last_price": 11.43,  # Use a more realistic current price
-                "last_price_date": current_date,
-                "model_type": "LSTM (Multi-horizon)",
-                "note": "Using simulated values due to model prediction error"
-            }
+            raise HTTPException(status_code=500, detail=f"Model prediction failed: {str(e)}")
         
         # Get last date from data
         last_date = df.index[-1] if isinstance(df.index, pd.DatetimeIndex) else pd.to_datetime(df['Date'].iloc[-1] if 'Date' in df else datetime.now())
@@ -770,7 +603,7 @@ async def predict_price_lstm(days_ahead: Optional[int] = None):
                     logger.info(f"Model is {'percent-change' if is_percent_change_model else 'direct-price'} prediction type")
             except Exception as e:
                 logger.warning(f"Could not read model metadata: {e}. Assuming direct price prediction model.")
-        
+
         # Process predictions based on model output type
         if isinstance(predictions, list):
             # Multi-output model
@@ -793,17 +626,15 @@ async def predict_price_lstm(days_ahead: Optional[int] = None):
                     if pred_array.shape[1] != 1:
                         pred_array = pred_array.reshape(-1, 1)
 
-                    # --- DIAGNOSTIC LOGGING START ---
                     scaler_instance = lstm_target_scalers[target_col]
                     logger.info(f"[{target_col}] Raw predicted value (scaled): {pred_value}")
                     logger.info(f"[{target_col}] Using scaler type: {type(scaler_instance)}")
-                    if hasattr(scaler_instance, 'data_min_'): # MinMaxScaler specific
+                    if hasattr(scaler_instance, 'data_min_'): 
                          logger.info(f"[{target_col}] Scaler data_min_: {scaler_instance.data_min_}")
-                    if hasattr(scaler_instance, 'data_max_'): # MinMaxScaler specific
+                    if hasattr(scaler_instance, 'data_max_'): 
                          logger.info(f"[{target_col}] Scaler data_max_: {scaler_instance.data_max_}")
-                    if hasattr(scaler_instance, 'data_range_'): # MinMaxScaler specific
+                    if hasattr(scaler_instance, 'data_range_'): 
                          logger.info(f"[{target_col}] Scaler data_range_: {scaler_instance.data_range_}")
-                    # --- DIAGNOSTIC LOGGING END ---
 
                     # Log scaler info for debugging
                     logger.info(f"Using scaler for {target_col}: {type(lstm_target_scalers[target_col])}")
@@ -822,7 +653,7 @@ async def predict_price_lstm(days_ahead: Optional[int] = None):
                 else:
                     # If no scaler, use raw value
                     prediction_denorm = pred_value
-                    logger.warning(f"[{target_col}] No scaler found. Using raw predicted value: {prediction_denorm}") # Added warning
+                    logger.warning(f"[{target_col}] No scaler found. Using raw predicted value: {prediction_denorm}") 
                 
                 # If model predicts percent change, convert to absolute price
                 if is_percent_change_model:
@@ -881,17 +712,15 @@ async def predict_price_lstm(days_ahead: Optional[int] = None):
                         if pred_array.shape[1] != 1:
                             pred_array = pred_array.reshape(-1, 1)
 
-                        # --- DIAGNOSTIC LOGGING START ---
                         scaler_instance = lstm_target_scalers[target_col]
                         logger.info(f"[{target_col}] Raw predicted value (scaled): {pred_value}")
                         logger.info(f"[{target_col}] Using scaler type: {type(scaler_instance)}")
-                        if hasattr(scaler_instance, 'data_min_'): # MinMaxScaler specific
+                        if hasattr(scaler_instance, 'data_min_'): 
                              logger.info(f"[{target_col}] Scaler data_min_: {scaler_instance.data_min_}")
-                        if hasattr(scaler_instance, 'data_max_'): # MinMaxScaler specific
+                        if hasattr(scaler_instance, 'data_max_'): 
                              logger.info(f"[{target_col}] Scaler data_max_: {scaler_instance.data_max_}")
-                        if hasattr(scaler_instance, 'data_range_'): # MinMaxScaler specific
+                        if hasattr(scaler_instance, 'data_range_'): 
                              logger.info(f"[{target_col}] Scaler data_range_: {scaler_instance.data_range_}")
-                        # --- DIAGNOSTIC LOGGING END ---
 
                         # Log scaler info for debugging
                         logger.info(f"Using scaler for {target_col}: {type(lstm_target_scalers[target_col])}")
@@ -910,7 +739,7 @@ async def predict_price_lstm(days_ahead: Optional[int] = None):
                     else:
                         # If no scaler, use raw value
                         prediction_denorm = pred_value
-                        logger.warning(f"[{target_col}] No scaler found. Using raw predicted value: {prediction_denorm}") # Added warning
+                        logger.warning(f"[{target_col}] No scaler found. Using raw predicted value: {prediction_denorm}") 
                         
                     # If model predicts percent change, convert to absolute price
                     if is_percent_change_model:
@@ -939,36 +768,8 @@ async def predict_price_lstm(days_ahead: Optional[int] = None):
                     }
             else:
                 # If output doesn't match expected number of targets
-                logger.warning(f"Model output size {len(pred_values)} doesn't match target columns {len(lstm_target_columns)}")
-                # For demo purposes, return simulated values if data is not available
-                # (Keep existing simulation logic for now)
-                logger.warning("Returning simulated values due to insufficient data.")
-                results = {}
-                
-                # Get current date in proper format
-                current_date = datetime.now().strftime('%Y-%m-%d')
-                
-                # Use current price from user, or a reasonable default if not available
-                current_price = 11.43  # Current price from user
-                
-                for horizon in [1, 3, 7]:
-                    if not return_all and horizon != days_ahead:
-                        continue
-                        
-                    # Ensure future date is properly formatted using trading days
-                    future_date = get_next_trading_days(datetime.now(), horizon).strftime('%Y-%m-%d')
-                    
-                    # Generate a more realistic simulated value
-                    simulated_price = current_price * (1 + 0.01 * horizon)  # 1% increase per day
-                    simulated_price = constrain_price_prediction(simulated_price, current_price, horizon)
-                    
-                    results[str(horizon)] = {
-                        "predicted_price": float(round(simulated_price, 2)),
-                        "prediction_date": future_date,
-                        "horizon_days": horizon,
-                        "trading_days": horizon,  # Clarify that this is trading days
-                        "simulated": True
-                    }
+                logger.error(f"Model output size {len(pred_values)} doesn't match target columns {len(lstm_target_columns)}")
+                raise HTTPException(status_code=500, detail=f"Model output size {len(pred_values)} doesn't match expected target columns {len(lstm_target_columns)}")
             
         # Log the prediction
         logger.info(f"LSTM predictions generated: {results}")
@@ -1086,64 +887,64 @@ def load_latest_data(required_features: List[str]):
     logger.info(f"Data loaded successfully from {source_path}. Final shape for prediction preparation: {df.shape}")
     return df
 
-# --- LSTM Model Definition (Copied from training script) ---
+# --- LSTM Model Definition ---
 def build_seq2seq_model(input_shape, horizon_keys=['1d', '3d', '7d']):
     """
-    Bygger en avanceret seq2seq model med encoder-decoder arkitektur til flere tidshorisonter.
-    Implementerer basal attention mekanisme for bedre forecasting.
+    Builds an advanced seq2seq model with encoder-decoder architecture for multiple time horizons.
+    Implements a basic attention mechanism for better forecasting.
     
     Args:
-        input_shape: Tuple med (seq_length, n_features)
-        horizon_keys: Liste med tidshorisonter der skal forudsiges (matches til output navne)
+        input_shape: Tuple with (seq_length, n_features)
+        horizon_keys: List of time horizons to predict (matches output names)
         
     Returns:
-        Keras model (ikke kompileret, da det ikke er nødvendigt for inference)
+        Keras model (not compiled, as it's not necessary for inference)
     """
     logging.info(f"Building seq2seq model structure with input shape {input_shape} for inference.")
     
-    # Input lag
+    # Input layer
     encoder_inputs = Input(shape=input_shape, name='encoder_input')
     
-    # Encoder LSTM-lag
+    # Encoder LSTM layers
     encoder_lstm1 = Bidirectional(LSTM(128, return_sequences=True), name='encoder_bilstm')
     encoder_output1 = encoder_lstm1(encoder_inputs)
-    encoder_output1 = Dropout(0.25)(encoder_output1) # Dropout anvendes også under inference
+    encoder_output1 = Dropout(0.25)(encoder_output1) # Dropout is also used during inference
     
     encoder_lstm2 = LSTM(128, return_sequences=True, return_state=True, name='encoder_lstm')
     encoder_output2, state_h, state_c = encoder_lstm2(encoder_output1)
     
-    # Attention mekanisme
+    # Attention mechanism
     attention = Dense(1, activation='tanh')(encoder_output2)
     attention = Flatten()(attention)
     attention_weights = Activation('softmax')(attention)
     attention_weights = RepeatVector(128)(attention_weights)
     attention_weights = Permute([2, 1])(attention_weights)
     
-    # Anvend attention på encoder output
+    # Apply attention to encoder output
     context_vector = Multiply()([encoder_output2, attention_weights])
     # Use the defined function for the Lambda layer
     context_vector = Lambda(sum_over_time_axis, name='lambda_sum')(context_vector)
     
-    # Gemmer encoder states til decoder initialisation
+    # Save encoder states for decoder initialization
     encoder_states = [state_h, state_c]
     
-    # Outputs for hver horisont
+    # Outputs for each horizon
     outputs = [] # Use a list to maintain order
     output_names = [f'output_{h}' for h in horizon_keys]
     
     for h in horizon_keys:
-        # Decoder med attention
+        # Decoder with attention
         # Ensure layer names match the saved model exactly
         decoder_lstm = LSTM(128, name=f'decoder_lstm_{h}') 
         # Repeat context vector for decoder input
         decoder_input = RepeatVector(1)(context_vector)
         decoder_output = decoder_lstm(decoder_input, initial_state=encoder_states)
         
-        # Tætte lag for prognose
+        # Dense layers for forecast
         decoder_dense1 = Dense(64, activation='relu', name=f'decoder_dense1_{h}')
-        decoder_dropout1 = Dropout(0.2) # Dropout anvendes også under inference
+        decoder_dropout1 = Dropout(0.2) # Dropout is also used during inference
         decoder_dense2 = Dense(32, activation='relu', name=f'decoder_dense2_{h}')
-        decoder_dropout2 = Dropout(0.2) # Dropout anvendes også under inference
+        decoder_dropout2 = Dropout(0.2) # Dropout is also used during inference
         decoder_output_layer = Dense(1, name=f'output_{h}') # Ensure name matches
         
         dense_out1 = decoder_dense1(decoder_output)
@@ -1153,7 +954,7 @@ def build_seq2seq_model(input_shape, horizon_keys=['1d', '3d', '7d']):
         final_output = decoder_output_layer(dense_out2)
         outputs.append(final_output)
     
-    # Bygger model
+    # Build model
     model = Model(inputs=encoder_inputs, outputs=outputs)
     
     logging.info(f"Model structure built successfully with {len(outputs)} outputs.")

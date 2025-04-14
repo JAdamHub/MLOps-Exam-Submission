@@ -7,60 +7,59 @@ sys.path.append(str(Path(__file__).resolve().parent))
 from monitoring.scheduler import ModelUpdateScheduler
 from pipelinevizoptions.src.pipelinevizoptions.model_metrics_viz import main as generate_visualizations
 
-# Konfigurer logging
+# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('pipeline.log'),
         logging.StreamHandler()
     ]
 )
 logger = logging.getLogger(__name__)
 
 def run_api():
-    """Kører FastAPI serveren"""
+    """Runs the FastAPI server"""
     uvicorn.run("api.main:app", host="0.0.0.0", port=8000, reload=False)
 
 def run_scheduler():
-    """Kører model update scheduler"""
+    """Runs the model update scheduler"""
     scheduler = ModelUpdateScheduler()
     scheduler.start()
 
 def main():
-    """Hovedfunktion der starter alle komponenter"""
+    """Main function that starts all components"""
     try:
-        # Start API i en separat thread
+        # Start API in a separate thread
         api_thread = threading.Thread(target=run_api)
         api_thread.daemon = True
         api_thread.start()
-        logger.info("API server startet")
+        logger.info("API server started")
 
-        # Start scheduler i en separat thread
+        # Start scheduler in a separate thread
         scheduler_thread = threading.Thread(target=run_scheduler)
         scheduler_thread.daemon = True
         scheduler_thread.start()
-        logger.info("Model update scheduler startet")
+        logger.info("Model update scheduler started")
 
-        # Generer initial visualiseringer
+        # Generate initial visualizations
         generate_visualizations()
-        logger.info("Initial visualiseringer genereret")
+        logger.info("Initial visualizations generated")
 
-        # Hold hovedtråden i live
+        # Keep the main thread alive
         while True:
             try:
-                # Generer visualiseringer hver time
+                # Generate visualizations every hour
                 generate_visualizations()
-                threading.Event().wait(3600)  # Vent 1 time
+                threading.Event().wait(3600)  # Wait 1 hour
             except KeyboardInterrupt:
-                logger.info("Afslutter program...")
+                logger.info("Exiting program...")
                 break
             except Exception as e:
-                logger.error(f"Fejl under kørsel: {e}")
+                logger.error(f"Error during execution: {e}")
                 continue
 
     except Exception as e:
-        logger.error(f"Kritisk fejl: {e}")
+        logger.error(f"Critical error: {e}")
         sys.exit(1)
 
 if __name__ == "__main__":

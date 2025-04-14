@@ -5,100 +5,100 @@ import os
 from pathlib import Path
 from dotenv import load_dotenv
 
-# Configure logging
+# configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 def run_module(module_name, skip_errors=False):
-    """Run a Python module by name"""
+    """run a python module by name"""
     try:
-        logging.info(f"Starting module: {module_name}")
-        # Tilføj sys.path til at inkludere projektets rod
+        logging.info(f"starting module: {module_name}")
+        # add sys.path to include project root
         sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
         module = importlib.import_module(module_name)
         if hasattr(module, 'main'):
             result = module.main()
-            # Check if the module returns a boolean success status
+            # check if the module returns a boolean success status
             if isinstance(result, bool):
                 if not result and not skip_errors:
-                    logging.warning(f"Module {module_name} returned False, indicating errors")
+                    logging.warning(f"module {module_name} returned false, indicating errors")
                     return False
-            logging.info(f"Completed module: {module_name}")
+            logging.info(f"completed module: {module_name}")
             return True
         else:
-            logging.warning(f"Module {module_name} has no main() function")
+            logging.warning(f"module {module_name} has no main() function")
             return skip_errors
     except Exception as e:
-        logging.error(f"Error running {module_name}: {e}")
+        logging.error(f"error running {module_name}: {e}")
         if not skip_errors:
             raise
         return False
 
 def main():
     """
-    Main function to run the entire data pipeline.
-    Processing steps:
-    1. Collect stock data (Vestas) and macroeconomic data
-    2. Combine datasets (kun handelsdage - danske børs åbningsdage)
-    3. Preprocess combined data
-    4. Feature engineering
-    5. Train LSTM model
+    main function to run the entire data pipeline.
+    processing steps:
+    1. collect stock data (vestas) and macroeconomic data
+    2. combine datasets (only trading days - danish stock exchange opening days)
+    3. preprocess combined data
+    4. feature engineering
+    5. train lstm model
     """    
-    # Tilføj sys.path til at inkludere projektets rod
+    # add sys.path to include project root
     project_root = Path(__file__).resolve().parents[2]
     sys.path.insert(0, str(project_root))
     
-    # Load environment variables from .env file
+    # load environment variables from .env file
     dotenv_path = project_root / ".env"
     if dotenv_path.exists():
         load_dotenv(dotenv_path=dotenv_path)
-        logging.info(f"Loaded environment variables from {dotenv_path}")
+        logging.info(f"loaded environment variables from {dotenv_path}")
     else:
         logging.warning(f".env file not found at {dotenv_path}")
         
-    logging.info("=== Starting ML Pipeline ===")
-    logging.info("BEMÆRK: Denne pipeline arbejder kun med data fra handelsdage (danske børs åbningsdage)")
+    logging.info("=== starting ML Pipeline ===")
+    logging.info("note: this pipeline only works with data from trading days (danish stock exchange opening days)")
     
-    # Data Collection steps - indsamler både Vestas aktiedata og makroøkonomiske data
-    # Brug skip_errors=True, da vi har implementeret fallback-mekanismer i stock_data_collector.py
+    # data collection steps - collects both vestas stock data and macroeconomic data
+    # use skip_errors=true, as we have implemented fallback mechanisms in stock_data_collector.py
     if not run_module("src.pipeline.stock_data_collector", skip_errors=True):
-        logging.warning("Stock data collection encountered errors but continuing with fallback data")
+        logging.warning("stock data collection encountered errors but continuing with fallback data")
     else:
-        logging.info("Stock data collection completed successfully")
+        logging.info("stock data collection completed successfully")
     
-    # Data Integration
+    # data integration
     if not run_module("src.pipeline.combined_data_processor", skip_errors=False):
-        logging.error("Halting pipeline due to error in dataset combination")
+        logging.error("halting pipeline due to error in dataset combination")
         sys.exit(1)
     
-    # Data Preprocessing
+    # data preprocessing
     if not run_module("src.pipeline.preprocessing", skip_errors=False):
-        logging.error("Halting pipeline due to error in data preprocessing")
+        logging.error("halting pipeline due to error in data preprocessing")
         sys.exit(1)
     
-    # Feature Engineering
+    # feature engineering
     if not run_module("src.pipeline.feature_engineering", skip_errors=False):
-        logging.error("Halting pipeline due to error in feature engineering")
+        logging.error("halting pipeline due to error in feature engineering")
         sys.exit(1)
     
-    # Model Training - kun LSTM
-    logging.info("Training LSTM model...")
+    # model training - only lstm
+    logging.info("training lstm model...")
     training_module = "src.pipeline.training-lstm"
     
     if not run_module(training_module, skip_errors=False):
-        logging.error("Halting pipeline due to error in LSTM model training")
+        logging.error("halting pipeline due to error in lstm model training")
         sys.exit(1)
     
-    logging.info("LSTM model training completed successfully")
+    logging.info("lstm model training completed successfully")
     
-        # Save LSTM Metrics
-    logging.info(" Saving LSTM model metric results ")
+    # save lstm metrics
+    logging.info(" saving lstm model metric results ")
     training_module = "src.pipeline.model_results_visualizer"
     
     if not run_module(training_module, skip_errors=False):
-        logging.error("Halting pipeline due to error in saving LSTM model metrics...")
+        logging.error("halting pipeline due to error in saving lstm model metrics...")
         sys.exit(1)
 
-    logging.info("=== ML Pipeline Completed Successfully ===")
+    logging.info("=== ML Pipeline completed successfully ===")
 
 if __name__ == "__main__":
     main() 
