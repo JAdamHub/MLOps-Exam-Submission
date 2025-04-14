@@ -98,6 +98,7 @@ python -m src.main
 
 This will:
 - Run the initial data pipeline
+- Train a LSTM model
 - Start the FastAPI server on http://localhost:8000
 - Start the Streamlit dashboard on http://localhost:8501
 - Schedule daily pipeline runs at 8:30 AM
