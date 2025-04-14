@@ -4,6 +4,8 @@ import threading
 from pathlib import Path
 import sys
 import importlib
+import time
+import schedule
 
 # add src to path
 sys.path.append(str(Path(__file__).resolve().parent))
@@ -53,37 +55,49 @@ def main():
         from pipeline.pipeline_start import main as run_pipeline
         run_pipeline()
         
-        # Start API in a separate thread
-        api_thread = threading.Thread(target=run_api)
-        api_thread.daemon = True
-        api_thread.start()
+        # Start API in a separate thread - store the process/thread reference
+        api_thread = start_api_server()
         logger.info("API server started")
         
         # Start streamlit app in separate thread
-        def run_streamlit():
-            import subprocess
-            subprocess.run(["streamlit", "run", "src/streamlit/app.py"])
-        
-        streamlit_thread = threading.Thread(target=run_streamlit)
-        streamlit_thread.daemon = True
-        streamlit_thread.start()
+        streamlit_thread = start_streamlit_app()
         logger.info("Streamlit app started")
         
-        # Start scheduler for timed pipeline runs
-        if scheduler_available:
-            scheduler_thread = threading.Thread(target=run_scheduler)
-            scheduler_thread.daemon = True
-            scheduler_thread.start()
-            logger.info("Model update scheduler started - next run scheduled at 20:30")
+        # Schedule pipeline run at 20:30
+        schedule.every().day.at("20:30").do(run_scheduled_pipeline, api_thread)
+        logger.info("Pipeline update scheduled for 20:30 daily")
         
-        # Keep main thread alive
+        # Keep main thread alive and check for scheduled tasks
         while True:
-            threading.Event().wait(60)  # Check every minute
+            schedule.run_pending()
+            time.sleep(60)  # Check every minute
+            
     except KeyboardInterrupt:
         logger.info("Exiting program...")
     except Exception as e:
         logger.error(f"Critical error: {e}")
         sys.exit(1)
+
+def run_scheduled_pipeline(api_thread):
+    """Run pipeline and restart API"""
+    try:
+        logger.info("TIK TOK!!! 20:30 - Starting scheduled pipeline run at 20:30...")
+        from pipeline.pipeline_start import main as run_pipeline
+        success = run_pipeline()
+        
+        if success:
+            logger.info("Pipeline update completed successfully, restarting API...")
+            # Stop the current API thread
+            api_thread.terminate()  # (needs proper implementation)
+            # Start new API thread with updated model
+            new_api_thread = start_api_server()
+            return new_api_thread
+        else:
+            logger.error("Scheduled pipeline run failed")
+            return api_thread
+    except Exception as e:
+        logger.error(f"Error during scheduled pipeline: {e}")
+        return api_thread
 
 if __name__ == "__main__":
     main() 
