@@ -39,37 +39,13 @@ The application is containerized using Docker with the following components:
    docker-compose down
    ```
 
-### Using Docker Directly
-
-1. Build the Docker image:
-   ```bash
-   docker build -t vestas-stock-api .
-   ```
-
-2. Run the container:
-   ```bash
-   docker run -d -p 8000:8000 \
-     -v ./data:/app/data \
-     -v ./models:/app/models \
-     -v ./reports:/app/reports \
-     -v ./results:/app/results \
-     --env-file .env \
-     --name vestas-stock-api \
-     vestas-stock-api
-   ```
-
-3. To stop the container:
-   ```bash
-   docker stop vestas-stock-api
-   docker rm vestas-stock-api
-   ```
-
-## API Access
+## API Access 
 
 Once running, the API can be accessed at:
 
 - API endpoint: http://localhost:8000
 - API documentation: http://localhost:8000/docs
+- Streamlit application: http://localhost:8501
 
 ## Troubleshooting
 
