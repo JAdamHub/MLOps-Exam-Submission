@@ -2,18 +2,18 @@ import graphviz
 from pathlib import Path
 
 def create_pipeline_visualization():
-    """Opretter en visualisering af pipeline arkitekturen med Graphviz"""
+    """Creates a visualization of the pipeline architecture using Graphviz"""
     
-    # Opret en ny digraph
+    # Create a new digraph
     dot = graphviz.Digraph(comment='MLOps Pipeline Architecture')
-    dot.attr(rankdir='LR')  # Venstre til højre layout
-    dot.attr(size='12,8')  # Gør visualiseringen bredere
-    dot.attr(dpi='300')  # Forbedret kvalitet
+    dot.attr(rankdir='LR')  # Left to right layout
+    dot.attr(size='12,8')  # Make visualization wider
+    dot.attr(dpi='300')  # Improved quality
     
-    # Tilføj styling
+    # Add styling
     dot.attr('node', shape='box', style='rounded,filled', fontsize='12')
     
-    # Data Pipeline Nodes (venstre)
+    # Data Pipeline Nodes (left)
     with dot.subgraph(name='cluster_0') as c:
         c.attr(label='Data Pipeline')
         c.node('vestas_data', 'Vestas Stock Data\n(Alpha Vantage API)', fillcolor='lightgreen')
@@ -28,7 +28,7 @@ def create_pipeline_visualization():
         c.edge('combined_data', 'processed_data', color='green')
         c.edge('processed_data', 'feature_data', color='green')
     
-    # Model Training Nodes (midten)
+    # Model Training Nodes (center)
     with dot.subgraph(name='cluster_1') as c:
         c.attr(label='Model Training & Deployment')
         c.node('model_training', 'LSTM Model Training\n(lstm_model.py)', fillcolor='lightyellow')
@@ -44,7 +44,7 @@ def create_pipeline_visualization():
         c.edge('model_training', 'target_scalers', color='orange')
         c.edge('model_training', 'model_metrics', color='orange')
     
-    # API & Frontend Nodes (højre)
+    # API & Frontend Nodes (right)
     with dot.subgraph(name='cluster_2') as c:
         c.attr(label='API & Frontend')
         c.node('api', 'FastAPI\n(stock_api.py)', fillcolor='lightpink')
@@ -60,18 +60,18 @@ def create_pipeline_visualization():
         c.edge('model_metrics', 'metrics_viz', color='red')
         c.edge('metrics_viz', 'streamlit', color='red')
     
-    # Scheduler flow (tilbage til data indsamling)
+    # Scheduler flow (back to data collection)
     dot.edge('scheduler', 'vestas_data', style='dashed', color='red', label='Fetch New Data')
     dot.edge('scheduler', 'macro_data', style='dashed', color='red', label='Fetch New Data')
     
-    # Tving rækkefølge med usynlige kanter
+    # Force order with invisible edges
     dot.edge('vestas_data', 'model_training', style='invis', weight='100')
     dot.edge('model_training', 'api', style='invis', weight='100')
     
-    # Opret output directory
-    output_dir = Path(__file__).parent  # Gem i samme mappe som denne fil
+    # Create output directory
+    output_dir = Path(__file__).parent  # Save in same directory as this file
     
-    # Gem visualisering
+    # Save visualization
     dot.render(str(output_dir / 'pipeline_architecture'), format='png', cleanup=True)
     print(f"Visualization saved in {output_dir}/pipeline_architecture.png")
 
