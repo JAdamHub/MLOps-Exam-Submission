@@ -33,8 +33,9 @@ env/
 *.swo
 
 # Data and Models
-# data/
-# models/*.joblib
+data/
+models/*.joblib
+models/*.keras
 
 # Logs
 *.log
