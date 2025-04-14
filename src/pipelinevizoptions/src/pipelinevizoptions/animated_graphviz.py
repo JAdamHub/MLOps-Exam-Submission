@@ -16,7 +16,7 @@ def create_animated_pipeline():
         dot.attr(rankdir='LR')  # Left to right layout
         
         # Tilføj styling
-        dot.attr('node', shape='box', style='rounded,filled')  # Tilføj farver
+        dot.attr('node', shape='box', style='rounded,filled')
         
         # Data Pipeline Nodes
         with dot.subgraph(name='cluster_0') as c:
@@ -72,7 +72,7 @@ def create_animated_pipeline():
             c.node('lstm_model', 'LSTM Model\n(lstm_multi_horizon_model.keras)', fillcolor=model_color)
             c.node('feature_scaler', 'Feature Scaler\n(lstm_feature_scaler.joblib)', fillcolor=model_color)
             c.node('target_scalers', 'Target Scalers\n(lstm_target_scalers.joblib)', fillcolor=model_color)
-            c.node('model_metrics', 'Model Metrics\n(model_metrics.json)', fillcolor=model_color)
+            c.node('model_metrics', 'Model Metrics\n(seq2seq_evaluation_results.csv)', fillcolor=model_color)
             
             # Model flow edges med farver og moving dots
             if active_step == 3:
@@ -96,16 +96,16 @@ def create_animated_pipeline():
                 c.edge('model_training', 'target_scalers', color=model_edge_color)
                 c.edge('model_training', 'model_metrics', color=model_edge_color)
         
-        # API & Monitoring Nodes
+        # API & Frontend Nodes
         with dot.subgraph(name='cluster_2') as c:
-            c.attr(label='API & Monitoring')
+            c.attr(label='API & Frontend')
             
             # Node farver baseret på active step
             api_color = 'lightpink' if active_step >= 5 else 'lightgray'
             api_edge_color = 'red' if active_step >= 5 else 'gray50'
             
             c.node('api', 'FastAPI\n(stock_api.py)', fillcolor=api_color)
-            c.node('prediction_store', 'Prediction Store\n(prediction_store.py)', fillcolor=api_color)
+            c.node('streamlit', 'Streamlit Frontend\n(streamlit/app.py)', fillcolor=api_color)
             c.node('scheduler', 'Model Update Scheduler\n(scheduler.py)', fillcolor=api_color)
             c.node('metrics_viz', 'Model Metrics Viz\n(model_metrics_viz.py)', fillcolor=api_color)
             
@@ -123,15 +123,17 @@ def create_animated_pipeline():
                 c.edge('target_scalers', 'api', color=api_edge_color)
             
             if active_step == 6:
-                c.edge('api', 'prediction_store', color=api_edge_color,
-                      label='●' if dot_position < 0.5 else '')
+                c.edge('api', 'streamlit', color=api_edge_color,
+                      label='●' if dot_position < 0.33 else '')
                 c.edge('model_metrics', 'metrics_viz', color=api_edge_color,
-                      label='●' if dot_position >= 0.5 else '')
+                      label='●' if 0.33 <= dot_position < 0.66 else '')
+                c.edge('metrics_viz', 'streamlit', color=api_edge_color,
+                      label='●' if dot_position >= 0.66 else '')
             else:
-                c.edge('api', 'prediction_store', color=api_edge_color)
+                c.edge('api', 'streamlit', color=api_edge_color)
                 c.edge('model_metrics', 'metrics_viz', color=api_edge_color)
+                c.edge('metrics_viz', 'streamlit', color=api_edge_color)
             
-            c.edge('prediction_store', 'scheduler', color=api_edge_color)
             c.edge('scheduler', 'model_training', style='dashed', color=api_edge_color)
         
         return dot
