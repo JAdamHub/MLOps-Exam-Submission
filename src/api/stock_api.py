@@ -417,7 +417,7 @@ async def health_check():
     }
 
 @app.get("/price/history")
-async def get_price_history(days: Optional[int] = 365):
+async def get_price_history(days: Optional[int] = 7300):
     """Get Vestas stock price history"""
     try:
         # Use existing data or return an error if not available

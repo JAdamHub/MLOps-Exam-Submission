@@ -29,7 +29,7 @@ st.set_page_config(
 st.title("Vestas Stock Price Dashboard 🌬️")
 st.markdown("""
     This dashboard displays historical Vestas stock prices and predictions for future prices.
-    Data is updated daily, and predictions are based on machine learning models.
+    Data is updated daily, and predictions are based on a Machine Learning (LSTM) model.
 """)
 
 # Add a session state to store data between interactions
@@ -56,7 +56,7 @@ def check_api_health():
         return {"status": "unhealthy", "error": str(e)}
 
 # Function to fetch price history
-def get_price_history(days=365):
+def get_price_history(days=7300):
     try:
         response = requests.get(f"{API_URL}/price/history?days={days}", timeout=10)
         if response.status_code == 200:
@@ -405,13 +405,42 @@ if st.sidebar.button("Update data 🔄"):
         st.success("Data updated!")
 
 # Select time period
-days_to_show = st.sidebar.slider(
-    "Number of days to display", 
-    min_value=7, 
-    max_value=365, 
-    value=90, 
-    step=1
+st.sidebar.subheader("Select Time Period 📅")
+period_type = st.sidebar.radio(
+    "Period type", 
+    ["Predefined periods", "Custom period"]
 )
+
+if period_type == "Predefined periods":
+    period_options = {
+        "1 day": 1,
+        "1 week": 7,
+        "1 month": 30,
+        "3 months": 90,
+        "6 months": 180,
+        "1 year": 365,
+        "2 years": 730,
+        "5 years": 1825,
+        "10 years": 3650,
+        "20 years": 7300
+    }
+    selected_period = st.sidebar.selectbox(
+        "Select period", 
+        list(period_options.keys()),
+        index=3  # Default to 3 months (90 days)
+    )
+    days_to_show = period_options[selected_period]
+    st.sidebar.info(f"Showing data for the last {days_to_show} days")
+else:
+    days_to_show = st.sidebar.number_input(
+        "Number of days to display",
+        min_value=1,
+        max_value=7300,
+        value=90,
+        step=1,
+        help="Enter a number between 1 and 7300 (20 years)"
+    )
+    st.sidebar.info(f"Showing data for the last {days_to_show} days")
 
 # Load data if not already loaded
 if st.session_state.price_history is None:
