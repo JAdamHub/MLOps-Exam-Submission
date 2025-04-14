@@ -88,7 +88,17 @@ def main():
         logging.error("Halting pipeline due to error in LSTM model training")
         sys.exit(1)
     
-    logging.info("=== ML Pipeline Completed Successfully with LSTM model ===")
+    logging.info("LSTM model training completed successfully")
+    
+        # Save LSTM Metrics
+    logging.info(" Saving LSTM model metric results ")
+    training_module = "src.pipeline.model_results_visualizer"
+    
+    if not run_module(training_module, skip_errors=False):
+        logging.error("Halting pipeline due to error in saving LSTM model metrics...")
+        sys.exit(1)
+
+    logging.info("=== ML Pipeline Completed Successfully ===")
 
 if __name__ == "__main__":
     main() 

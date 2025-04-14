@@ -1072,8 +1072,9 @@ def evaluate_seq2seq_model(model, X_test, y_test_dict, seq_length=30, horizon_ke
     # Save results to CSV
     results_dir = Path('results')
     results_dir.mkdir(parents=True, exist_ok=True)
-    results.to_csv(results_dir / 'seq2seq_evaluation_results.csv', index=False)
-    logging.info(f"Evaluation saved to results/seq2seq_evaluation_results.csv")
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    results.to_csv(results_dir / f'seq2seq_evaluation_results_{timestamp}.csv', index=False)
+    logging.info(f"Evaluation saved to results/seq2seq_evaluation_results_{timestamp}.csv")
     
     return results
 
