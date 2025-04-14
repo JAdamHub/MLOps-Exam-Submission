@@ -68,7 +68,7 @@ This project demonstrates a complete machine learning operations (MLOps) pipelin
 
 1. **Clone the repository:**
    ```bash
-   git clone https://github.com/yourusername/vestas-stock-prediction.git
+   git clone https://github.com/JAdamHub/MLOps-Exam-Submission.git
    cd vestas-stock-prediction
    ```
 
@@ -88,22 +88,9 @@ This project demonstrates a complete machine learning operations (MLOps) pipelin
    ALPHA_VANTAGE_API_KEY="your_api_key_here"
    ```
 
-5. **Create required directories:**
-   ```bash
-   mkdir -p data/raw/stocks data/raw/macro data/intermediate/combined data/intermediate/preprocessed data/features models reports results plots
-   ```
-
-### Running the Pipeline
+### Running the Pipeline + API & Streamlit App
 
 To run the complete data pipeline (collection, preprocessing, feature engineering, and model training):
-
-```bash
-python -m src.pipeline.pipeline_start
-```
-
-### Running the Application
-
-To start both the API and Streamlit dashboard:
 
 ```bash
 python -m src.main
@@ -154,7 +141,7 @@ The API provides the following endpoints:
 - **GET /** - Welcome message and API information
 - **GET /health** - Health check for the API
 - **GET /price/history** - Get Vestas stock price history
-  - Parameters: `days` (optional, default=7300)
+  - Parameters: `days` (optional, default=7300) (last 20 years)
 - **POST /predict/lstm** - Predict Vestas stock prices
   - Parameters: `days_ahead` (optional, values: 1, 3, or 7)
 
@@ -180,9 +167,8 @@ The system automatically runs the pipeline daily at 8:30 AM to:
 ## 🛠️ Model Details
 
 - **Model Type:** Sequence-to-Sequence LSTM (Long Short-Term Memory)
-- **Input Features:** Price history, technical indicators, macroeconomic data
+- **Input Features:** Price history, technical indicators, macroeconomic data (S&P 500 ETF (SPY), Vanguard FTSE Europe ETF (VGK), EUR/USD exchange rates, and United States Oil Fund (USO) to contextualize market trends
 - **Forecast Horizons:** 1-day, 3-day, and 7-day price predictions
-- **Sequence Length:** 10-30 days of historical data
 - **Evaluation Metrics:** RMSE, MAE, R²
 
 ## 📝 License
