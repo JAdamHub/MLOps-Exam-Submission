@@ -1195,7 +1195,6 @@ def main():
         medians_path = MODELS_DIR / 'lstm_feature_medians.joblib'
         joblib.dump(feature_medians, medians_path)
         logging.info(f"Feature medians saved to {medians_path}")
-        # ---> DONE WITH MEDIANS <---
 
         # Scale targets (one scaler for each target)
         target_scalers = {}
@@ -1267,11 +1266,11 @@ def main():
         model.save(models_dir / 'lstm_multi_horizon_model.keras')
         logging.info("Model saved as 'lstm_multi_horizon_model.keras'")
         
-        # Save feature scaler
+        # save feature scaler
         joblib.dump(feature_scaler, models_dir / 'lstm_feature_scaler.joblib')
         logging.info("Feature scaler saved as 'lstm_feature_scaler.joblib'")
         
-        # Save target scalers
+        # save target scalers
         joblib.dump(target_scalers, models_dir / 'lstm_target_scalers.joblib')
         logging.info("Target scalers saved as 'lstm_target_scalers.joblib'")
         
@@ -1283,11 +1282,9 @@ def main():
         joblib.dump(seq_length, models_dir / 'lstm_sequence_length.joblib')
         logging.info("Sequence length saved as 'lstm_sequence_length.joblib'")
         
-        # ---> SAVE MEDIAN FILENAME <---
-        # Save feature medians (added here for consistency)
+        # save feature medians
         joblib.dump(feature_medians, models_dir / 'lstm_feature_medians.joblib')
         logging.info("Feature medians saved as 'lstm_feature_medians.joblib'")
-        # ---> DONE WITH MEDIAN FILENAME <---
 
         # Save target columns
         joblib.dump(target_columns, models_dir / 'lstm_target_columns.joblib')
