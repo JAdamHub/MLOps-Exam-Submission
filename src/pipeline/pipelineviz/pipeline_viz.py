@@ -6,15 +6,17 @@ def create_pipeline_visualization():
     
     # Opret en ny digraph
     dot = graphviz.Digraph(comment='MLOps Pipeline Architecture')
-    dot.attr(rankdir='LR')  # Left to right layout
+    dot.attr(rankdir='LR')  # Venstre til højre layout
+    dot.attr(size='12,8')  # Gør visualiseringen bredere
+    dot.attr(dpi='300')  # Forbedret kvalitet
     
     # Tilføj styling
-    dot.attr('node', shape='box', style='rounded,filled')
+    dot.attr('node', shape='box', style='rounded,filled', fontsize='12')
     
-    # Data Pipeline Nodes
+    # Data Pipeline Nodes (venstre)
     with dot.subgraph(name='cluster_0') as c:
         c.attr(label='Data Pipeline')
-        c.node('vestas_data', 'Vestas Stock Data\n(VWSB.DEX)', fillcolor='lightgreen')
+        c.node('vestas_data', 'Vestas Stock Data\n(Alpha Vantage API)', fillcolor='lightgreen')
         c.node('macro_data', 'Macroeconomic Data\n(Alpha Vantage API)', fillcolor='lightgreen')
         c.node('combined_data', 'Combined Data\n(combined_data_processor.py)', fillcolor='lightgreen')
         c.node('processed_data', 'Processed Data\n(preprocessing.py)', fillcolor='lightgreen')
@@ -26,7 +28,7 @@ def create_pipeline_visualization():
         c.edge('combined_data', 'processed_data', color='green')
         c.edge('processed_data', 'feature_data', color='green')
     
-    # Model Training Nodes
+    # Model Training Nodes (midten)
     with dot.subgraph(name='cluster_1') as c:
         c.attr(label='Model Training & Deployment')
         c.node('model_training', 'LSTM Model Training\n(lstm_model.py)', fillcolor='lightyellow')
@@ -42,13 +44,13 @@ def create_pipeline_visualization():
         c.edge('model_training', 'target_scalers', color='orange')
         c.edge('model_training', 'model_metrics', color='orange')
     
-    # API & Frontend Nodes
+    # API & Frontend Nodes (højre)
     with dot.subgraph(name='cluster_2') as c:
         c.attr(label='API & Frontend')
         c.node('api', 'FastAPI\n(stock_api.py)', fillcolor='lightpink')
         c.node('streamlit', 'Streamlit Frontend\n(streamlit/app.py)', fillcolor='lightpink')
         c.node('scheduler', 'Model Update Scheduler\n(scheduler.py)', fillcolor='lightpink')
-        c.node('metrics_viz', 'Model Metrics Viz\n(model_metrics_viz.py)', fillcolor='lightpink')
+        c.node('metrics_viz', 'Model Metrics Viz\n(model_results_visualizer.py)', fillcolor='lightpink')
         
         # API flow edges
         c.edge('lstm_model', 'api', color='red')
@@ -57,11 +59,17 @@ def create_pipeline_visualization():
         c.edge('api', 'streamlit', color='red')
         c.edge('model_metrics', 'metrics_viz', color='red')
         c.edge('metrics_viz', 'streamlit', color='red')
-        c.edge('scheduler', 'model_training', style='dashed', color='red')
+    
+    # Scheduler flow (tilbage til data indsamling)
+    dot.edge('scheduler', 'vestas_data', style='dashed', color='red', label='Fetch New Data')
+    dot.edge('scheduler', 'macro_data', style='dashed', color='red', label='Fetch New Data')
+    
+    # Tving rækkefølge med usynlige kanter
+    dot.edge('vestas_data', 'model_training', style='invis', weight='100')
+    dot.edge('model_training', 'api', style='invis', weight='100')
     
     # Opret output directory
-    output_dir = Path('visualizations')
-    output_dir.mkdir(exist_ok=True)
+    output_dir = Path(__file__).parent  # Gem i samme mappe som denne fil
     
     # Gem visualisering
     dot.render(str(output_dir / 'pipeline_architecture'), format='png', cleanup=True)
