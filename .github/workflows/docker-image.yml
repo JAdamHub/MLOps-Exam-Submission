@@ -24,12 +24,16 @@ jobs:
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Generate lower case image tag
+        id: image_meta
+        run: echo "image_tag=ghcr.io/$(echo ${{ github.repository }} | tr '[:upper:]' '[:lower:]'):latest" >> $GITHUB_OUTPUT
+
       - name: Build and push Docker image
         uses: docker/build-push-action@v4
         with:
           context: .
           file: ./Dockerfile
           push: true
-          tags: ghcr.io/${{ github.repository }}:latest
+          tags: ${{ steps.image_meta.outputs.image_tag }}
           cache-from: type=gha
           cache-to: type=gha,mode=max 
