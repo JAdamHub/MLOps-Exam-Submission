@@ -69,7 +69,7 @@ This project demonstrates a complete machine learning operations (MLOps) pipelin
 1. **Clone the repository:**
    ```bash
    git clone https://github.com/JAdamHub/MLOps-Exam-Submission.git
-   cd vestas-stock-prediction
+   cd MLOps-Exam-Submission
    ```
 
 2. **Create and activate a virtual environment:**
