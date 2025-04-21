@@ -1,3 +1,5 @@
+# **Note:** The `docker` branch is used for building the Docker image via GitHub Actions. 🧪
+
 # 📈 Vestas Stock Price Prediction MLOps Pipeline 🚀
 
 A comprehensive MLOps pipeline for predicting Vestas stock prices using historical market data and macroeconomic indicators. The system leverages LSTM deep learning models to forecast stock prices at multiple time horizons (1, 3, and 7 days ahead).
