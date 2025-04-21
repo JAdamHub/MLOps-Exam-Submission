@@ -60,7 +60,7 @@ MACRO_INDICATORS = {
     "TLT": {"name": "treasury_etf", "function": "TIME_SERIES_DAILY", "description": "20+ Year Treasury Bond ETF"}
 }
 
-# API request settings - forøget for at håndtere API-begrænsninger bedre
+# API request settings
 MAX_RETRIES = 5
 RETRY_DELAY = 15  # seconds, increased to avoid API rate limits
 MAX_DELAY = 60  # max seconds to wait in case of rate limiting
