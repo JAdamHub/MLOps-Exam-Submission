@@ -137,6 +137,32 @@ This script will:
    docker-compose down
    ```
 
+### Running the Pre-built Image from GHCR
+
+If you prefer not to build the image locally, you can pull and run the pre-built image directly from the GitHub Container Registry:
+
+1. **Pull the latest image:**
+   ```bash
+   docker pull ghcr.io/jadamhub/mlops-exam-submission:latest
+   ```
+
+2. **Run the container:**
+   Place your `your_api_key_here` with your actual Alpha Vantage API key.
+   ```bash
+   docker run -d --name mlops-app \
+     -p 8000:8000 \
+     -p 8501:8501 \
+     -e ALPHA_VANTAGE_API_KEY="your_api_key_here" \
+     ghcr.io/jadamhub/mlops-exam-submission:latest
+   ```
+   *  `-d` runs the container in detached mode (in the background).
+   *  `--name mlops-app` gives the container a recognizable name.
+   *  `-p 8000:8000` maps your local port 8000 to the container's port 8000 (FastAPI).
+   *  `-p 8501:8501` maps your local port 8501 to the container's port 8501 (Streamlit).
+   *  `-e ALPHA_VANTAGE_API_KEY="..."` sets the required environment variable for the Alpha Vantage API key.
+
+   You can then access the API at `http://localhost:8000` and the Streamlit dashboard at `http://localhost:8501`.
+
 ## 🌐 API Endpoints
 
 The API provides the following endpoints:
