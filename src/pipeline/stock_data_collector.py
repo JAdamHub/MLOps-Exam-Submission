@@ -60,13 +60,6 @@ MACRO_INDICATORS = {
     "TLT": {"name": "treasury_etf", "function": "TIME_SERIES_DAILY", "description": "20+ Year Treasury Bond ETF"}
 }
 
-# Ekstra Alpha Vantage API endpoints til økonomiske indikatorer
-ECONOMIC_INDICATORS = {
-    "GDP": {"function": "REAL_GDP", "interval": "quarterly"},
-    "INFLATION": {"function": "INFLATION", "interval": "monthly"},
-    "UNEMPLOYMENT": {"function": "UNEMPLOYMENT", "interval": "monthly"}
-}
-
 # API request settings - forøget for at håndtere API-begrænsninger bedre
 MAX_RETRIES = 5
 RETRY_DELAY = 15  # seconds, increased to avoid API rate limits
@@ -406,105 +399,6 @@ def save_trading_days_only(df, symbol=STOCK_SYMBOL):
         logging.error(f"Error saving trading days data: {e}")
         return False
 
-def generate_mock_stock_data(days=365, symbol="VESTAS"):
-    """
-    generates mock stock data when api calls fail.
-    this ensures the pipeline can continue even if data collection fails.
-    """
-    logging.warning(f"Generating mock stock data for {symbol} as fallback")
-    end_date = datetime.now()
-    start_date = end_date - timedelta(days=days)
-    
-    # generate trading days
-    trading_days = get_trading_days(start_date, end_date)
-    
-    # generate random prices and volume
-    np.random.seed(42)  # for reproducibility
-    
-    # starting price and volatility
-    base_price = 150.0  # starting price in dkk
-    daily_volatility = 0.015  # daily volatility (1.5%)
-    
-    # generate price series with random walk
-    n = len(trading_days)
-    returns = np.random.normal(0.0005, daily_volatility, n)  # generate random returns
-    
-    # calculate cumulative product of (1+return) to get price evolution
-    price_factors = np.cumprod(1 + returns)
-    prices = base_price * price_factors
-    
-    # generate ohlc prices based on close price
-    close_prices = prices
-    high_prices = close_prices * (1 + np.random.uniform(0, 0.01, n))
-    low_prices = close_prices * (1 - np.random.uniform(0, 0.01, n))
-    open_prices = close_prices * (1 + np.random.normal(0, 0.005, n))
-    
-    # generate volume
-    volumes = np.random.normal(500000, 100000, n).astype(int)
-    volumes = np.maximum(volumes, 10000)  # ensure minimum volume
-    
-    # create dataframe
-    df = pd.DataFrame({
-        'open': open_prices,
-        'high': high_prices,
-        'low': low_prices,
-        'close': close_prices,
-        'volume': volumes
-    }, index=trading_days)
-    
-    return df
-
-def generate_mock_macro_data(mock_stock_data_index):
-    """
-    generates mock macroeconomic data for the indices in MACRO_INDICATORS
-    when api calls fail.
-    """
-    logging.warning("Generating mock macroeconomic data as fallback")
-    
-    mock_data = {}
-    
-    for symbol, info in MACRO_INDICATORS.items():
-        # generate a time series for each indicator
-        np.random.seed(hash(symbol) % 1000)  # different seed for each indicator
-        
-        if info['function'] == "FX_DAILY":
-            # for currency exchange rates
-            if symbol == "EUR/USD":
-                base_value = 1.10
-                volatility = 0.005
-            else:  # EUR/DKK
-                base_value = 7.45
-                volatility = 0.002
-        else:
-            # for stocks and indices
-            if "SPY" in symbol:
-                base_value = 450.0
-                volatility = 0.01
-            elif "europe" in info['name']:
-                base_value = 60.0
-                volatility = 0.01
-            elif "crude_oil" in info['name']:
-                base_value = 75.0
-                volatility = 0.02
-            else:  # bonds
-                base_value = 90.0
-                volatility = 0.005
-                
-        # generate random values based on random walk
-        n = len(mock_stock_data_index)
-        returns = np.random.normal(0.0001, volatility, n)
-        price_factors = np.cumprod(1 + returns)
-        values = base_value * price_factors
-        
-        # create series with correct index
-        series = pd.Series(values, index=mock_stock_data_index)
-        mock_data[info['name']] = series
-    
-    # combine into a dataframe
-    mock_df = pd.DataFrame(mock_data)
-    
-    return mock_df
-
 def collect_macro_data():
     """collect macroeconomic data from alpha vantage."""
     all_macro_data = {}
@@ -658,7 +552,7 @@ def collect_vestas_data():
     else:
         logging.error(f"Failed to fetch data for symbol {STOCK_SYMBOL}")
     
-    # if the symbol didn't work, log an error instead of generating mock data
+    # if the symbol didn't work, log an error
     if not success:
         logging.error("Failed to collect Vestas stock data. Pipeline cannot continue without valid stock data.")
     
