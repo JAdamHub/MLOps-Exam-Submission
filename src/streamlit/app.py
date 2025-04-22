@@ -56,7 +56,7 @@ def check_api_health():
         return {"status": "unhealthy", "error": str(e)}
 
 # Function to fetch price history
-def get_price_history(days=7300):
+def get_price_history(days=6570):
     try:
         response = requests.get(f"{API_URL}/price/history?days={days}", timeout=10)
         if response.status_code == 200:
@@ -422,7 +422,7 @@ if period_type == "Predefined periods":
         "2 years": 730,
         "5 years": 1825,
         "10 years": 3650,
-        "20 years": 7300
+        "18 years": 6570
     }
     selected_period = st.sidebar.selectbox(
         "Select period", 
@@ -435,10 +435,10 @@ else:
     days_to_show = st.sidebar.number_input(
         "Number of days to display",
         min_value=1,
-        max_value=7300,
+        max_value=6570,
         value=90,
         step=1,
-        help="Enter a number between 1 and 7300 (20 years)"
+        help="Enter a number between 1 and 6570 (18 years)"
     )
     st.sidebar.info(f"Showing data for the last {days_to_show} days")
 

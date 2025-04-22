@@ -11,6 +11,7 @@ import os
 import json
 import numpy as np
 from dotenv import load_dotenv
+import sqlite3
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -20,7 +21,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 # Assumes the script is in src/pipeline
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 RAW_STOCKS_DIR = PROJECT_ROOT / "data" / "raw" / "stocks"
-RAW_MACRO_DIR = PROJECT_ROOT / "data" / "raw" / "macro"
+DB_FILE = RAW_STOCKS_DIR / "market_data.db" # Database file path
 
 # Load environment variables
 load_dotenv(PROJECT_ROOT / ".env")
@@ -67,7 +68,6 @@ MAX_DELAY = 60  # max seconds to wait in case of rate limiting
 
 # Ensure data directories exist
 RAW_STOCKS_DIR.mkdir(parents=True, exist_ok=True)
-RAW_MACRO_DIR.mkdir(parents=True, exist_ok=True)
 
 def get_trading_days(start_date, end_date):
     """
@@ -352,235 +352,172 @@ def process_economic_data(data, indicator):
         logging.error(traceback.format_exc())
         return None
 
-def save_data(df, filename, directory):
-    """Saves the processed data to a CSV file."""
-    if df is None or df.empty:
-        logging.error("No data to save.")
-        return False
-        
-    try:
-        # Save to CSV
-        output_path = directory / filename
-        df.to_csv(output_path)
-        logging.info(f"Data saved successfully to {output_path}")
-        return True
-    except Exception as e:
-        logging.error(f"Error saving data: {e}")
-        return False
-
-def save_trading_days_only(df, symbol=STOCK_SYMBOL):
-    """
-    filter data to only contain trading days (days when markets are open).
-    for stock data this is already the case, but we add extra features.
-    """
-    try:
-        # copy dataframe to avoid changes to the original
-        trading_days_df = df.copy()
-        
-        # add information about whether it's a trading day
-        trading_days_df['is_trading_day'] = 1
-        
-        # calculate number of days since last trading day
-        trading_days_df['days_since_last_trading'] = (trading_days_df.index.to_series().diff().dt.days)
-        trading_days_df['days_since_last_trading'] = trading_days_df['days_since_last_trading'].fillna(0)
-        
-        # calculate percentage change compared to previous day
-        if 'close' in trading_days_df.columns:
-            trading_days_df['pct_change'] = trading_days_df['close'].pct_change() * 100
-            trading_days_df['pct_change'] = trading_days_df['pct_change'].fillna(0)
-        
-        # save to csv
-        output_path = RAW_STOCKS_DIR / TARGET_TRADING_DAYS_FILENAME
-        trading_days_df.to_csv(output_path)
-        logging.info(f"Trading days data saved successfully to {output_path} ({len(trading_days_df)} trading days)")
-        
-        return True
-    except Exception as e:
-        logging.error(f"Error saving trading days data: {e}")
-        return False
-
 def collect_macro_data():
-    """collect macroeconomic data from alpha vantage."""
-    all_macro_data = {}
-    all_success = True
-    
-    # go through each macroeconomic indicator
+    """Collects macroeconomic data and returns a combined DataFrame."""
+    all_macro_dfs = []
     for symbol, info in MACRO_INDICATORS.items():
-        logging.info(f"Collecting {info['description']} data...")
-        
-        # create parameters based on function type
+        logging.info(f"Collecting {info['description']} ({symbol})...")
+        params = {
+            "function": info['function'],
+            "outputsize": OUTPUT_SIZE,
+            "apikey": ALPHA_VANTAGE_API_KEY
+        }
         if info['function'] == "FX_DAILY":
-            # currency rates have different parameters
             from_currency, to_currency = symbol.split('/')
-            params = {
-                "function": info['function'],
-                "from_symbol": from_currency,
-                "to_symbol": to_currency,
-                "outputsize": OUTPUT_SIZE,
-                "apikey": ALPHA_VANTAGE_API_KEY
-            }
+            params.update({"from_symbol": from_currency, "to_symbol": to_currency})
         else:
-            # stocks and indices
-            params = {
-                "function": info['function'],
-                "symbol": symbol,
-                "outputsize": OUTPUT_SIZE,
-                "apikey": ALPHA_VANTAGE_API_KEY
-            }
-        
-        # get data
+            params["symbol"] = symbol
+
         data = fetch_data(params)
-        
         if data:
-            # process data based on function type
+            df = None # Initialize df
             if info['function'] == "FX_DAILY":
-                df = process_fx_data(data)
-            else:
-                # determine time series key based on function
-                if info['function'] == "TIME_SERIES_DAILY":
-                    time_series_key = "Time Series (Daily)"
-                elif info['function'] == "TIME_SERIES_WEEKLY":
-                    time_series_key = "Weekly Time Series"
-                elif info['function'] == "TIME_SERIES_MONTHLY":
-                    time_series_key = "Monthly Time Series"
-                else:
-                    logging.error(f"Unsupported function: {info['function']}")
-                    all_success = False
-                    continue
-                    
-                df = process_stock_data(data, time_series_key)
-            
+                df_raw = process_fx_data(data)
+                if df_raw is not None:
+                    # Keep only the 'close' column for FX data
+                    df = df_raw[['close']].copy()
+            elif info['function'] == "TIME_SERIES_DAILY": # Handle stock/ETF data
+                 df_raw = process_stock_data(data, "Time Series (Daily)")
+                 if df_raw is not None:
+                     # Keep only the 'close' column for ETFs used as macro indicators
+                     df = df_raw[['close']].copy()
+            # Add elif for other function types if needed (e.g., economic indicators)
+
             if df is not None:
-                # save individual indicator
-                filename = f"{info['name']}_daily.csv"
-                save_data(df, filename, RAW_MACRO_DIR)
+                # Rename all columns with prefix
+                # Since we only kept 'close', the new name is predictable
+                new_column_name = f"{info['name']}_close"
+                df.rename(columns={'close': new_column_name}, inplace=True)
+                new_columns = [new_column_name] # List containing the single new name
+
+                # --- Validation Step ---
+                # Ensure we have data to create a dataframe
+                if not new_columns:
+                    logging.error("No valid columns found in processed data")
+                    continue
+
+                # Create DataFrame
+                df = pd.DataFrame({
+                    new_column_name: df[new_column_name]
+                }, index=df.index)
                 
-                # add to combined dataframe
-                # we only keep 'close' column for simplicity
-                all_macro_data[info['name']] = df['close']
-                
-                logging.info(f"Added {info['name']} to macro economic dataset")
-                
-                # give the api a break for rate limits
-                time.sleep(RETRY_DELAY)
+                # Sort by date
+                df.sort_index(inplace=True)
+
+                all_macro_dfs.append(df)
+                logging.info(f"Processed {info['name']} data.")
             else:
-                logging.error(f"Failed to process {info['name']} data")
-                all_success = False
+                logging.warning(f"Could not process data for {symbol}")
         else:
-            logging.error(f"Failed to fetch {info['name']} data")
-            all_success = False
-    
-    # combine all indicators into one dataframe
-    if all_macro_data:
-        macro_df = pd.DataFrame(all_macro_data)
-        
-        # handle missing values
-        macro_df = macro_df.ffill().bfill()
-        
-        # add is_trading_day column
-        macro_df['is_trading_day'] = 1
-        
-        # save combined macroeconomic dataset
-        save_data(macro_df, MACRO_DAILY_FILENAME, RAW_MACRO_DIR)
-        logging.info(f"Combined macro economic data saved with {len(macro_df.columns)} indicators")
-    else:
-        # if all api calls failed, log error
-        logging.error("Failed to collect any macro economic data. Pipeline cannot continue without valid macro data.")
-        all_success = False  # no data was collected, mark as failed
-    
-    return all_success
+            logging.warning(f"Could not fetch data for {symbol}")
+
+        time.sleep(RETRY_DELAY) # Respect API limits
+
+    if not all_macro_dfs:
+        logging.error("Failed to collect any macroeconomic data.")
+        return None
+
+    # Combine all macro DataFrames
+    combined_macro_df = pd.concat(all_macro_dfs, axis=1)
+    logging.info(f"Combined macro data shape: {combined_macro_df.shape}")
+    return combined_macro_df
 
 def collect_vestas_data():
-    """collect vestas stock data from alpha vantage."""
-    success = False
-    
-    logging.info(f"Attempting to fetch Vestas data using symbol {STOCK_SYMBOL}")
-        
-    # get daily data
-    daily_params = {
+    """Collects Vestas stock data and returns a DataFrame."""
+    logging.info(f"Collecting Vestas daily data ({STOCK_SYMBOL})...")
+    params = {
         "function": "TIME_SERIES_DAILY",
         "symbol": STOCK_SYMBOL,
         "outputsize": OUTPUT_SIZE,
         "apikey": ALPHA_VANTAGE_API_KEY
     }
-    
-    daily_data = fetch_data(daily_params)
-    
-    if daily_data:
-        daily_df = process_stock_data(daily_data, "Time Series (Daily)")
-        if daily_df is not None and save_data(daily_df, TARGET_DAILY_FILENAME, RAW_STOCKS_DIR):
-            logging.info(f"Daily Stock Data Collection Completed Successfully with symbol {STOCK_SYMBOL}")
-            # also save version with only trading days (and extra features)
-            save_trading_days_only(daily_df)
-            success = True
-            
-            # give the api a break before next call
-            time.sleep(RETRY_DELAY)
-            
-            # get weekly data
-            weekly_params = {
-                "function": "TIME_SERIES_WEEKLY",
-                "symbol": STOCK_SYMBOL,
-                "apikey": ALPHA_VANTAGE_API_KEY
-            }
-            
-            weekly_data = fetch_data(weekly_params)
-            
-            if weekly_data:
-                weekly_df = process_stock_data(weekly_data, "Weekly Time Series")
-                if weekly_df is not None and save_data(weekly_df, TARGET_WEEKLY_FILENAME, RAW_STOCKS_DIR):
-                    logging.info(f"Weekly Stock Data Collection Completed Successfully with symbol {STOCK_SYMBOL}")
-            
-            # give the api a break before next call
-            time.sleep(RETRY_DELAY)
-            
-            # get monthly data
-            monthly_params = {
-                "function": "TIME_SERIES_MONTHLY",
-                "symbol": STOCK_SYMBOL,
-                "apikey": ALPHA_VANTAGE_API_KEY
-            }
-            
-            monthly_data = fetch_data(monthly_params)
-            
-            if monthly_data:
-                monthly_df = process_stock_data(monthly_data, "Monthly Time Series")
-                if monthly_df is not None and save_data(monthly_df, TARGET_MONTHLY_FILENAME, RAW_STOCKS_DIR):
-                    logging.info(f"Monthly Stock Data Collection Completed Successfully with symbol {STOCK_SYMBOL}")
+    data = fetch_data(params)
+    if data:
+        df = process_stock_data(data, "Time Series (Daily)")
+        if df is not None:
+            # Rename columns to be stock-specific
+            df.rename(columns={
+                'open': 'stock_open',
+                'high': 'stock_high',
+                'low': 'stock_low',
+                'close': 'stock_close',
+                'volume': 'stock_volume'
+            }, inplace=True)
+            logging.info(f"Vestas data collected successfully. Shape: {df.shape}")
+            return df
         else:
-            logging.error(f"Failed to process or save data for symbol {STOCK_SYMBOL}")
+            logging.error("Failed to process Vestas data.")
+            return None
     else:
-        logging.error(f"Failed to fetch data for symbol {STOCK_SYMBOL}")
-    
-    # if the symbol didn't work, log an error
-    if not success:
-        logging.error("Failed to collect Vestas stock data. Pipeline cannot continue without valid stock data.")
-    
-    return success
+        logging.error("Failed to fetch Vestas data.")
+        return None
+
+def save_to_db(df, db_file, table_name='market_data'):
+    """Saves the combined DataFrame to an SQLite database."""
+    if df is None or df.empty:
+        logging.error("No data provided to save to database.")
+        return False
+    try:
+        conn = sqlite3.connect(db_file)
+        # Use index=True to save the date index as a column named 'date'
+        df.to_sql(table_name, conn, if_exists='replace', index=True, index_label='date')
+        conn.close()
+        logging.info(f"Data successfully saved to table '{table_name}' in {db_file}")
+        # Verify table creation
+        conn = sqlite3.connect(db_file)
+        cursor = conn.cursor()
+        cursor.execute(f"SELECT name FROM sqlite_master WHERE type='table' AND name='{table_name}';")
+        if cursor.fetchone():
+            logging.info(f"Table '{table_name}' verified in the database.")
+            # Log first 5 rows date and stock_close
+            df_check = pd.read_sql(f"SELECT date, stock_close FROM {table_name} ORDER BY date LIMIT 5", conn)
+            logging.info(f"First 5 rows check:\n{df_check}")
+        else:
+            logging.error(f"Verification failed: Table '{table_name}' not found after saving.")
+        conn.close()
+
+        return True
+    except Exception as e:
+        logging.error(f"Error saving data to database {db_file}: {e}")
+        import traceback
+        logging.error(traceback.format_exc())
+        return False
 
 def main():
-    """main function to run the data collection process."""
-    logging.info("=== Starting Stock and Macro Data Collection ===")
-    
-    # collect vestas stock data
-    logging.info("=== Starting Vestas Stock Data Collection ===")
-    vestas_success = collect_vestas_data()
-    
-    if not vestas_success:
+    """Main function to run the data collection and save to database."""
+    logging.info("=== Starting Streamlined Data Collection ===")
+
+    # Collect Vestas data
+    vestas_df = collect_vestas_data()
+    if vestas_df is None:
         logging.error("Vestas stock data collection failed. Pipeline cannot continue.")
         return False
-    
-    # collect macroeconomic data
-    logging.info("=== Starting Macro Economic Data Collection ===")
-    macro_success = collect_macro_data()
-    
-    if not macro_success:
-        logging.error("Macro economic data collection failed. Pipeline cannot continue.")
+
+    # Collect Macroeconomic data
+    macro_df = collect_macro_data()
+    if macro_df is None:
+        logging.warning("Macroeconomic data collection failed or returned no data. Proceeding with stock data only.")
+        combined_df = vestas_df
+    else:
+        # Combine Vestas and Macro data using an outer join to keep all dates
+        logging.info("Combining Vestas and Macroeconomic data...")
+        combined_df = pd.merge(vestas_df, macro_df, left_index=True, right_index=True, how='outer')
+        combined_df.sort_index(inplace=True)
+        logging.info(f"Combined data shape after merge: {combined_df.shape}")
+
+        # Optional: Filter to only include dates present in Vestas data (approximates trading days)
+        # Also forward fill macro data to avoid NaNs on non-trading days for macro indicators
+        combined_df = combined_df[combined_df['stock_close'].notna()].fillna(method='ffill')
+        logging.info(f"Combined data shape after filtering and ffill: {combined_df.shape}")
+
+    # Save combined data to SQLite database
+    if save_to_db(combined_df, DB_FILE):
+        logging.info("=== Data Collection and DB Save Completed Successfully ===")
+        return True
+    else:
+        logging.error("=== Data Collection Failed During DB Save ===")
         return False
-    
-    # If we reach here, both steps succeeded
-    logging.info("=== All Data Collection Completed Successfully ===")
-    return True
 
 if __name__ == "__main__":
-    main() 
+    if not main():
+        sys.exit(1) # Exit with error code if main fails 

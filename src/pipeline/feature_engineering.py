@@ -11,14 +11,14 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 # determine project root based on script location
 # assumes the script is in src/pipeline
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-INTERMEDIATE_PREPROCESSED_DIR = PROJECT_ROOT / "data" / "intermediate" / "preprocessed"  # updated path
-PROCESSED_FEATURES_DIR = PROJECT_ROOT / "data" / "features"
+# INTERMEDIATE_PREPROCESSED_DIR = PROJECT_ROOT / "data" / "intermediate" / "preprocessed"  # updated path
+PROCESSED_FEATURES_DIR = PROJECT_ROOT / "data" / "features" # Keep for potential future use or debugging output
 MODELS_DIR = PROJECT_ROOT / "models"
 
 # input file from preprocessing step
-INPUT_FILENAME = "vestas_macro_preprocessed_trading_days.csv"
+# INPUT_FILENAME = "vestas_macro_preprocessed_trading_days.csv"
 # output file
-OUTPUT_FILENAME = "vestas_features_trading_days.csv"
+# OUTPUT_FILENAME = "vestas_features_trading_days.csv"
 
 # feature engineering parameters
 PRICE_COLUMN = 'close'  # stock price typically uses "close" as the primary price column
@@ -29,30 +29,38 @@ VOLATILITY_WINDOW = 14  # window for rolling standard deviation (volatility)
 FORECAST_HORIZONS = [1, 3, 7]  # predict the price 1, 3, and 7 days ahead
 
 # ensure output directory exists
-PROCESSED_FEATURES_DIR.mkdir(parents=True, exist_ok=True)
+# PROCESSED_FEATURES_DIR.mkdir(parents=True, exist_ok=True)
 
-INPUT_FILE_PATH = INTERMEDIATE_PREPROCESSED_DIR / INPUT_FILENAME
-OUTPUT_FILE_PATH = PROCESSED_FEATURES_DIR / OUTPUT_FILENAME
+# INPUT_FILE_PATH = INTERMEDIATE_PREPROCESSED_DIR / INPUT_FILENAME
+# OUTPUT_FILE_PATH = PROCESSED_FEATURES_DIR / OUTPUT_FILENAME
 
-def load_data(filepath: Path) -> pd.DataFrame | None:
-    """load preprocessed data."""
-    try:
-        df = pd.read_csv(filepath, index_col=0, parse_dates=True)
-        logging.info(f"processed data loaded successfully from {filepath}")
-        return df
-    except Exception as e:
-        logging.error(f"error loading processed data: {e}")
-        return None
+# def load_data(filepath: Path) -> pd.DataFrame | None:
+#     """load preprocessed data."""
+#     try:
+#         df = pd.read_csv(filepath, index_col=0, parse_dates=True)
+#         logging.info(f"processed data loaded successfully from {filepath}")
+#         return df
+#     except Exception as e:
+#         logging.error(f"error loading processed data: {e}")
+#         return None
 
 def create_features(df: pd.DataFrame) -> pd.DataFrame | None:
     """generates features for the stock price model."""
-    if PRICE_COLUMN not in df.columns:
-        logging.error(f"required column '{PRICE_COLUMN}' not found in the dataframe.")
+    if df is None or df.empty:
+        logging.error("Input DataFrame for feature engineering is None or empty.")
         return None
 
     try:
         logging.info("starting feature engineering for vestas stock data...")
         features_df = df.copy()
+
+        # Percentage change for the main price column
+        features_df[f'{PRICE_COLUMN}_pct_change'] = df[PRICE_COLUMN].pct_change() * 100
+        logging.debug(f"created {PRICE_COLUMN}_pct_change feature")
+        
+        # Volatility (14-day rolling standard deviation of daily returns)
+        features_df['volatility_14d'] = df[PRICE_COLUMN].pct_change().rolling(window=14).std() * 100
+        logging.debug("created volatility_14d feature")
 
         # 1. lagged features - more lags to capture more complex patterns
         for lag in LAG_PERIODS + [14, 21, 30]:
@@ -229,38 +237,40 @@ def create_features(df: pd.DataFrame) -> pd.DataFrame | None:
             
             logging.debug("created ohlc price difference features")
             
-        # 11. target features (price predictions ahead in time)
+        # 11. target features (price predictions ahead in time) - CREATE ABSOLUTE TARGETS FIRST
+        absolute_target_columns = []
         for horizon in FORECAST_HORIZONS:
-            # absolute price
-            features_df[f'price_target_{horizon}d'] = df[PRICE_COLUMN].shift(-horizon)
-            
-            # price change in percent
-            features_df[f'price_change_{horizon}d'] = df[PRICE_COLUMN].pct_change(periods=-horizon) * 100
-            
-            # binary direction of movement (up/down)
-            features_df[f'price_direction_{horizon}d'] = (features_df[f'price_change_{horizon}d'] > 0).astype(int)
-            
-            logging.debug(f"created target features for {horizon} day horizon")
+            target_col_name = f'price_target_{horizon}d'
+            features_df[target_col_name] = df[PRICE_COLUMN].shift(-horizon)
+            absolute_target_columns.append(target_col_name)
+            logging.debug(f"created absolute target feature: {target_col_name}")
 
-        # remove rows with nan values
-        nan_count_before = features_df.isna().sum().sum()
-        logging.info(f"nan values before cleaning: {nan_count_before}")
-        
-        # fill nan values
-        features_df.fillna(method='ffill', inplace=True) 
-        features_df.fillna(method='bfill', inplace=True) 
-        
-        # check for remaining nan values
-        nan_count_after = features_df.isna().sum().sum()
-        if nan_count_after > 0:
-            logging.warning(f"still {nan_count_after} nan values remaining after ffill/bfill. filling with 0.")
-            features_df.fillna(0, inplace=True)
-        else:
-            logging.info("all nan values handled.")
+        # ---> ADDED: Convert absolute targets to percentage change <---
+        # This transformation is done here instead of in the training script
+        percent_target_columns = []
+        for target_col in absolute_target_columns:
+            horizon = int(target_col.split('_')[-1].replace('d', ''))
+            pct_target_col_name = f'pct_change_{target_col}'
+            # Calculate percentage change from current price to target price
+            # Need to handle potential division by zero if PRICE_COLUMN is zero
+            features_df[pct_target_col_name] = (
+                (features_df[target_col] / (df[PRICE_COLUMN].replace(0, np.nan))) - 1
+            ) * 100
+            percent_target_columns.append(pct_target_col_name)
+            logging.info(f"Converted {target_col} to percent change target: {pct_target_col_name}")
+        # ---> END ADDED <---
+
+        # IMPORTANT: Do NOT handle NaNs here anymore. 
+        # NaN handling (filling) will happen in the training script after splitting data
+        # to prevent data leakage from validation/test sets into training set during imputation.
+        nan_count_before_save = features_df.isna().sum().sum()
+        if nan_count_before_save > 0:
+             logging.warning(f"Feature engineering introduced {nan_count_before_save} NaN values. They will be handled in the training script.")
 
         logging.info("feature engineering completed.")
-        logging.info(f"final feature set shape: {features_df.shape}")
+        logging.info(f"final feature set shape (before NaN handling in training): {features_df.shape}")
         logging.info(f"sample features: {features_df.columns.tolist()[:10]}...")
+        logging.info(f"final target columns (percentage change): {percent_target_columns}")
 
         return features_df
 
@@ -315,14 +325,6 @@ def calculate_chaikin_money_flow(high, low, close, volume, period=20):
     mfv = clv * volume
     cmf = mfv.rolling(window=period).sum() / volume.rolling(window=period).sum()
     return cmf
-
-def save_features(df: pd.DataFrame, filepath: Path):
-    """saves the dataframe with features to a csv file."""
-    try:
-        df.to_csv(filepath)
-        logging.info(f"feature data saved successfully to {filepath}")
-    except Exception as e:
-        logging.error(f"error saving feature data: {e}")
 
 def calculate_adx(data, period=14):
     """calculate the average directional index (adx)."""
@@ -456,22 +458,22 @@ def calculate_macro_features(data):
     # add more macro features as needed
     return features_df
 
-def main():
+def main(df_preprocessed: pd.DataFrame):
     """main function to run the feature engineering process."""
     logging.info("--- starting feature engineering process ---")
 
     # load data
-    df = load_data(INPUT_FILE_PATH)
-    if df is None:
-        logging.error("halting pipeline due to data loading error.")
-        sys.exit(1)
+    # df = load_data(INPUT_FILE_PATH)
+    if df_preprocessed is None:
+        logging.error("halting pipeline: No preprocessed data received.")
+        return None # Return None on error
 
     # create features
-    features_df = create_features(df)
+    features_df = create_features(df_preprocessed)
     if features_df is None:
         logging.error("halting pipeline due to feature creation error.")
-        sys.exit(1)
-        
+        return None # Return None on error
+
     # calculate market and macro features separately and merge
     market_features = calculate_market_features(features_df) # use features_df as it contains needed columns
     macro_features = calculate_macro_features(features_df)
@@ -486,24 +488,37 @@ def main():
         features_df = features_df.merge(macro_features, left_index=True, right_index=True, how='left')
         logging.info(f"merged {macro_features.shape[1]} macro features.")
         
-    # handle any potential nans introduced by market/macro features
-    nan_count_before_final = features_df.isna().sum().sum()
-    if nan_count_before_final > 0:
-        logging.warning(f"{nan_count_before_final} nans found after merging market/macro features. filling with ffill/bfill.")
-        features_df.fillna(method='ffill', inplace=True)
-        features_df.fillna(method='bfill', inplace=True)
-        nan_count_after_final = features_df.isna().sum().sum()
-        if nan_count_after_final > 0:
-            logging.warning(f"still {nan_count_after_final} nans remaining. filling with 0.")
-            features_df.fillna(0, inplace=True)
+    # --- Final NaN drop before returning --- 
+    # This removes rows with NaNs from initial feature calculations (lags, rolling) 
+    # or from merges, and rows where targets are NaN (end of series)
+    initial_rows = len(features_df)
+    features_df.dropna(inplace=True)
+    rows_dropped = initial_rows - len(features_df)
+    if rows_dropped > 0:
+        logging.info(f"Dropped {rows_dropped} rows containing NaN values (e.g., initial periods, merge gaps, or end-of-series targets). Final shape: {features_df.shape}")
+    else:
+        logging.info("No rows dropped due to NaNs.")
 
     # save features
-    save_features(features_df, OUTPUT_FILE_PATH)
+    # save_features(features_df, OUTPUT_FILE_PATH)
 
     logging.info(f"final dataset with features shape: {features_df.shape}")
     logging.info("--- feature engineering process completed successfully ---")
-    return True
+    return features_df # Return the features DataFrame
 
 if __name__ == "__main__":
-    if not main():
-        sys.exit(1)
+    # Add placeholder logic for running standalone if needed, e.g., load from DB
+    logging.warning("This script is intended to be run as part of the pipeline.")
+    # Example: Load preprocessed data manually if needed for testing
+    # project_root = Path(__file__).resolve().parents[2]
+    # db_file = project_root / "data" / "raw" / "market_data.db"
+    # from preprocessing import load_data as load_preprocessed_data # Use the db loader
+    # df_preprocessed = load_preprocessed_data(db_file, "market_data")
+    # if df_preprocessed is not None:
+    #     result_df = main(df_preprocessed)
+    #     if result_df is None:
+    #         sys.exit(1)
+    # else:
+    #     logging.error("Could not load preprocessed data for standalone run.")
+    #     sys.exit(1)
+    sys.exit(0) # Indicate success if run standalone without error (though not typical use)
