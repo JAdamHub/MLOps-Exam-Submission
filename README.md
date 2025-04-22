@@ -11,7 +11,7 @@ Welcome to Version 2.0 of the MLOps pipeline for predicting Vestas (VWSB.DEX) st
 
 ## 🌟 Key Features
 
-*   **Data Collection:** Fetches Vestas stock data and relevant macroeconomic indicators (ETFs, FX rates) from Alpha Vantage API. ↔️
+*   **Data Collection:** Fetches Vestas stock data and relevant macroeconomic indicators (ETFs, FX rates) from Alpha Vantage API. **Now includes incremental updates:** Checks the database and only fetches data newer than the latest entry, reducing redundant downloads. ↔️
 *   **Data Storage:** Persists collected data in an SQLite database. 💾
 *   **Preprocessing:** Cleans and prepares the data. ✨
 *   **Feature Engineering:** Generates a rich set of technical indicators and time-based features. ⚙️
