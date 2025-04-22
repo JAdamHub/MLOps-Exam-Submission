@@ -58,14 +58,14 @@ BASE_DIR = Path(__file__).resolve().parents[2]
 MODELS_DIR = BASE_DIR / "models"
 DATA_DIR = BASE_DIR / "data"
 RAW_DATA_DIR = DATA_DIR / "raw"
-DB_FILE = RAW_DATA_DIR / "market_data.db"
+DB_FILE = RAW_DATA_DIR / "stocks" / "market_data.db"
 DB_TABLE_NAME = "market_data"
 
 # Data paths
-VESTAS_DATA_FILE = DATA_DIR / "raw" / "stocks" / "vestas_macro_combined_trading_days.csv"  # Changed to combined file
-VESTAS_DAILY_DATA_FILE = DATA_DIR / "raw" / "stocks" / "vestas_daily.csv"  # Alternative file
+# VESTAS_DATA_FILE = DATA_DIR / "raw" / "stocks" / "vestas_macro_combined_trading_days.csv"  # Changed to combined file
+VESTAS_DAILY_DATA_FILE = DATA_DIR / "raw" / "stocks" / "vestas_daily.csv"  # Alternative file for price history endpoint only
 # Define the primary feature file path used for training and prediction
-PROCESSED_FEATURES_FILE = DATA_DIR / "features" / "vestas_features_trading_days.csv" # Match training script path
+# PROCESSED_FEATURES_FILE = DATA_DIR / "features" / "vestas_features_trading_days.csv" # No longer primary source for API
 
 # LSTM model paths
 LSTM_MODEL_PATH = MODELS_DIR / "lstm_model_checkpoint.keras"
@@ -116,24 +116,6 @@ async def startup_event():
             if lstm_feature_names:
                 sample_size = min(5, len(lstm_feature_names))
                 logger.info(f"Sample feature names: {lstm_feature_names[:sample_size]}...")
-                
-                # Validate if feature file exists and contains required features
-                if PROCESSED_FEATURES_FILE.exists():
-                    try:
-                        # Just read the column names without loading all data
-                        feature_df = pd.read_csv(PROCESSED_FEATURES_FILE, nrows=1)
-                        available_features = feature_df.columns.tolist()
-                        
-                        # Check for missing features
-                        missing_features = set(lstm_feature_names) - set(available_features)
-                        if missing_features:
-                            logger.error(f"Feature file is missing {len(missing_features)} required features: {list(missing_features)[:5]}...")
-                        else:
-                            logger.info(f"Feature file contains all {len(lstm_feature_names)} required features")
-                    except Exception as e:
-                        logger.error(f"Error validating feature file: {str(e)}")
-                else:
-                    logger.error(f"Feature file for prediction not found: {PROCESSED_FEATURES_FILE}")
         else:
             logger.error(f"LSTM feature names file not found: {LSTM_FEATURE_NAMES_FILE}")
             lstm_feature_names = [] # Ensure it's a list
@@ -159,86 +141,47 @@ async def startup_event():
 
     # Load Vestas data with better error handling
     try:
-        # Try loading vestas_daily.csv first (robust method)
-        if VESTAS_DAILY_DATA_FILE.exists():
-            try:
-                # Try to load with explicit date parsing
-                vestas_data = pd.read_csv(VESTAS_DAILY_DATA_FILE, parse_dates=[0], index_col=0)
-                vestas_data.index.name = 'date'
-                
-                # Verify we have valid dates
-                if vestas_data.index.isna().any() or (vestas_data.index.year < 1980).any():
-                    logger.warning("Some invalid dates in daily data, trying to fix...")
-                    # Get valid rows
-                    valid_rows = ~vestas_data.index.isna() & (vestas_data.index.year >= 1980)
-                    if valid_rows.any():
-                        vestas_data = vestas_data.loc[valid_rows]
-                        logger.info(f"Filtered to {len(vestas_data)} valid rows")
-                    else:
-                        logger.error("No valid dates in daily data")
-                        vestas_data = None
-                
-                if vestas_data is not None and len(vestas_data) > 0:
-                    # Rename columns to ensure consistent naming
-                    if 'Close' not in vestas_data.columns and 'close' in vestas_data.columns:
-                        vestas_data.rename(columns={'close': 'Close', 'open': 'Open', 'high': 'High', 'low': 'Low', 'volume': 'Volume'}, inplace=True)
-                    
-                    logger.info(f"Successfully loaded daily data with shape: {vestas_data.shape}")
-                    logger.info(f"Date range: {vestas_data.index.min()} to {vestas_data.index.max()}")
-                else:
-                    logger.error("Failed to load valid daily data")
-            except Exception as e:
-                logger.error(f"Error loading daily data: {str(e)}")
-                vestas_data = None
-        else:
-            logger.warning(f"Daily data file not found: {VESTAS_DAILY_DATA_FILE}")
+        # Load OHLCV data directly from the database for the /price/history endpoint
+        logger.info(f"Loading price history data from database: {DB_FILE}")
+        if not DB_FILE.exists():
+            raise FileNotFoundError(f"Database file not found at {DB_FILE}")
+
+        conn = sqlite3.connect(DB_FILE)
+        # Select only the necessary stock columns
+        query = f"SELECT date, stock_open, stock_high, stock_low, stock_close, stock_volume FROM {DB_TABLE_NAME} ORDER BY date"
+        df_db = pd.read_sql_query(query, conn)
+        conn.close()
+
+        if df_db.empty:
+            logger.error("No data returned from database query for price history.")
             vestas_data = None
-        
-        # Try using features data as fallback if daily data failed
-        if (vestas_data is None or len(vestas_data) == 0) and PROCESSED_FEATURES_FILE.exists():
-            try:
-                logger.info("Trying to use features file as fallback for price history")
-                
-                # Use the load_latest_data function for robust date parsing
-                feature_data = load_latest_data(required_features=lstm_feature_names[:5])  # Only need a few features
-                
-                if feature_data is not None and len(feature_data) > 0:
-                    # Extract key price columns for price history endpoint
-                    price_cols = ['close', 'open', 'high', 'low', 'volume']
-                    price_cols_cap = ['Close', 'Open', 'High', 'Low', 'Volume']
-                    
-                    vestas_data = pd.DataFrame(index=feature_data.index)
-                    
-                    # Try to find price columns in either lowercase or uppercase
-                    for i, col in enumerate(price_cols):
-                        if col in feature_data.columns:
-                            vestas_data[price_cols_cap[i]] = feature_data[col]
-                        elif price_cols_cap[i] in feature_data.columns:
-                            vestas_data[price_cols_cap[i]] = feature_data[price_cols_cap[i]]
-                    
-                    # Make sure we have at least Close/close column
-                    if 'Close' not in vestas_data.columns:
-                        logger.error("Could not find price columns in features file")
-                        vestas_data = None
-                    else:
-                        logger.info(f"Successfully created price history from features with shape: {vestas_data.shape}")
-                        
-                        # Save this as a new daily data file for future use
-                        try:
-                            vestas_data.to_csv(VESTAS_DAILY_DATA_FILE)
-                            logger.info(f"Saved extracted price data to {VESTAS_DAILY_DATA_FILE}")
-                        except Exception as e:
-                            logger.error(f"Failed to save extracted price data: {str(e)}")
-                else:
-                    logger.error("Failed to load features file as fallback")
-            except Exception as e:
-                logger.error(f"Error using features file as fallback: {str(e)}")
-        
-        # Log final data status
-        if vestas_data is None:
-            logger.critical("No data loaded for /price/history endpoint. API will return errors.")
         else:
-            logger.info(f"Final data for price history endpoint: {vestas_data.shape} rows")
+            # Parse date and set index
+            df_db['date'] = pd.to_datetime(df_db['date'])
+            df_db.set_index('date', inplace=True)
+
+            # Rename columns for the endpoint
+            rename_map = {
+                'stock_open': 'Open',
+                'stock_high': 'High',
+                'stock_low': 'Low',
+                'stock_close': 'Close',
+                'stock_volume': 'Volume'
+            }
+            df_db.rename(columns=rename_map, inplace=True)
+            
+            # Ensure correct types
+            for col in ['Open', 'High', 'Low', 'Close']:
+                df_db[col] = pd.to_numeric(df_db[col], errors='coerce')
+            if 'Volume' in df_db.columns:
+                 df_db['Volume'] = pd.to_numeric(df_db['Volume'], errors='coerce').fillna(0).astype(int)
+
+            # Remove rows where essential price data might be missing after conversion
+            df_db.dropna(subset=['Close'], inplace=True)
+
+            vestas_data = df_db
+            logger.info(f"Successfully loaded price history from database. Shape: {vestas_data.shape}")
+            logger.info(f"Date range: {vestas_data.index.min()} to {vestas_data.index.max()}")
 
     except Exception as e:
         logger.error(f"Error loading Vestas data: {str(e)}")
@@ -491,7 +434,7 @@ async def predict_price_lstm(days_ahead: Optional[int] = None):
         if not lstm_target_columns: raise HTTPException(status_code=500, detail="LSTM target columns not loaded")
 
         # Get latest feature data using the improved function
-        df_features = load_latest_data(required_features=lstm_feature_names)
+        df_features = load_and_prepare_latest_data(required_features=lstm_feature_names, seq_length=lstm_sequence_length)
 
         if df_features is None: raise HTTPException(status_code=500, detail="Could not load feature data for prediction.")
         if len(df_features) < lstm_sequence_length:
@@ -617,6 +560,9 @@ async def predict_price_lstm(days_ahead: Optional[int] = None):
         # Final logging and return
         logger.info(f"LSTM predictions generated: {results}")
         return {
+            "request_details": {
+                "requested_horizon": days_ahead if not return_all else "all",
+            },
             "vestas_predictions": results,
             "last_price": last_price,
             "last_price_date": last_date.strftime('%Y-%m-%d'),
@@ -630,76 +576,215 @@ async def predict_price_lstm(days_ahead: Optional[int] = None):
         logger.error(f"Error making LSTM prediction: {e}")
         import traceback
         logger.error(traceback.format_exc())
-        raise HTTPException(status_code=500, detail=f"Error making prediction: {str(e)}")
 
-def load_latest_data(required_features: List[str]):
+        # Ensure the error message is user-friendly
+        detail_message = f"An internal error occurred while making the prediction."
+        # You might want to log the original error `e` for debugging purposes but not expose it to the user
+        logger.error(f"Internal prediction error details: {str(e)}") 
+        raise HTTPException(status_code=500, detail=detail_message)
+
+def load_and_prepare_latest_data(required_features: List[str], seq_length: int):
     """
-    Load the latest feature data for LSTM prediction.
-    Prioritizes loading the specific feature file used in training.
-    Handles NaN/inf values using preloaded medians.
+    Loads the latest raw/preprocessed data from the database,
+    performs feature engineering, cleans, and prepares it for scaling and prediction.
+
+    Args:
+        required_features: List of feature names the model expects.
+        seq_length: The sequence length needed by the model.
 
     Returns:
-        DataFrame with the latest data or None if loading fails.
+        DataFrame with the latest features (unscaled) or None if processing fails.
     """
-    source_path = PROCESSED_FEATURES_FILE
-    if not source_path.exists():
-        logger.error(f"Required feature file not found: {source_path}")
+    # --- Feature Engineering Logic (mirrored from feature_engineering.py for API use) ---
+    # Import necessary functions (ensure feature_engineering.py is importable)
+    try:
+        # Assumes src is in PYTHONPATH or feature_engineering is in the same directory level
+        from src.pipeline.feature_engineering import (
+            create_features as calculate_all_features,
+            calculate_market_features,
+            calculate_macro_features
+        )
+        feature_engineering_available = True
+    except ImportError as ie:
+        logger.error(f"Could not import feature engineering functions: {ie}. API predictions might fail.")
+        feature_engineering_available = False
+        # Define dummy functions if import fails, to prevent NameErrors later
+        def calculate_all_features(df): return df
+        def calculate_market_features(df): return pd.DataFrame(index=df.index)
+        def calculate_macro_features(df): return pd.DataFrame(index=df.index)
+    # ---------------------------------------------------------------------------------
+
+    if not feature_engineering_available:
+        logger.error("Feature engineering module not available. Cannot prepare data.")
         return None
 
+    # 1. Load data from Database
+    if not DB_FILE.exists():
+        logger.error(f"Database file not found: {DB_FILE}")
+        return None
     try:
-        # Load data, ensuring date parsing
-        df = pd.read_csv(source_path, index_col=0, parse_dates=True)
-        df.sort_index(inplace=True)
-        logger.info(f"Loaded feature data from {source_path}. Shape: {df.shape}")
+        conn = sqlite3.connect(DB_FILE)
+        # Load enough data: sequence length + extra for feature calculation lookback (e.g., 90 days)
+        days_to_load = seq_length + 90
+        # Query to get the last N records based on date
+        query = f"SELECT * FROM {DB_TABLE_NAME} ORDER BY date DESC LIMIT {days_to_load}"
+        df_raw = pd.read_sql_query(query, conn)
+        conn.close()
 
-        # --- Data Cleaning ---
-        # Check for required features *before* extensive cleaning
-        missing_features = set(required_features) - set(df.columns)
-        if missing_features:
-            logger.error(f"Loaded data is missing required features: {missing_features}")
+        if df_raw.empty:
+            logger.error("No data loaded from database.")
             return None
 
-        # Handle infinities first
-        for col in required_features:
-             if df[col].isin([np.inf, -np.inf]).any():
-                  inf_count = df[col].isin([np.inf, -np.inf]).sum()
-                  logger.warning(f"Feature '{col}' contains {inf_count} inf values. Replacing with NaN.")
-                  df[col] = df[col].replace([np.inf, -np.inf], np.nan)
-
-        # Handle NaNs using preloaded medians
-        if not lstm_feature_medians:
-             logger.warning("Feature medians not loaded. Cannot impute NaNs accurately.")
-             # Fallback: fill with column median from the loaded data itself
-             df[required_features] = df[required_features].fillna(df[required_features].median())
-        else:
-             for col in required_features:
-                  if df[col].isna().any():
-                       nan_count = df[col].isna().sum()
-                       if col in lstm_feature_medians:
-                           median_val = lstm_feature_medians[col]
-                           logger.warning(f"Feature '{col}' contains {nan_count} NaNs. Filling with PRELOADED median ({median_val:.4f}).")
-                           df[col].fillna(median_val, inplace=True)
-                       else:
-                           # Fallback if median for this specific feature wasn't loaded
-                           fallback_median = df[col].median()
-                           logger.error(f"Feature '{col}' contains {nan_count} NaNs, BUT median not preloaded! Using fallback median ({fallback_median:.4f}).")
-                           df[col].fillna(fallback_median, inplace=True)
-
-        # Final check for NaNs after imputation
-        remaining_nans = df[required_features].isna().sum().sum()
-        if remaining_nans > 0:
-             logger.error(f"{remaining_nans} NaNs remain after imputation. Prediction might fail.")
-             # Optional: Fill remaining with 0 or raise error
-             df[required_features] = df[required_features].fillna(0)
-
-        logger.info(f"Data loaded and cleaned successfully. Final shape: {df.shape}")
-        return df
+        # Convert date and set index, sort oldest to newest
+        df_raw['date'] = pd.to_datetime(df_raw['date'])
+        df_raw.set_index('date', inplace=True)
+        df_raw.sort_index(inplace=True)
+        logger.info(f"Loaded last {len(df_raw)} records from database {DB_FILE}")
 
     except Exception as e:
-        logger.error(f"Error loading or processing feature file {source_path}: {e}")
-        import traceback
+        logger.error(f"Error loading data from database {DB_FILE}: {e}")
+        return None
+
+    # 2. Preprocessing (Minimal - mirroring preprocessing.py)
+    df_processed = df_raw.copy()
+    # Rename stock columns for consistency with feature engineering functions
+    rename_map = {
+        'stock_open': 'open',
+        'stock_high': 'high',
+        'stock_low': 'low',
+        'stock_close': 'close',
+        'stock_volume': 'volume'
+    }
+    df_processed.rename(columns=rename_map, inplace=True, errors='ignore')
+
+    for col in ['open', 'high', 'low', 'close', 'volume']:
+         if col in df_processed.columns:
+             df_processed[col] = pd.to_numeric(df_processed[col], errors='coerce')
+    logger.info("Minimal preprocessing applied.")
+
+    # 3. Feature Engineering (Using imported functions)
+    try:
+        logging.info("Applying feature engineering...")
+        # Calculate base features, technical indicators etc.
+        df_features = calculate_all_features(df_processed)
+        if df_features is None:
+            raise ValueError("calculate_all_features returned None")
+
+        # Calculate and merge market/macro features
+        market_features = calculate_market_features(df_features)
+        macro_features = calculate_macro_features(df_features)
+
+        if not market_features.empty:
+            df_features = df_features.merge(market_features, left_index=True, right_index=True, how='left')
+        if not macro_features.empty:
+            df_features = df_features.merge(macro_features, left_index=True, right_index=True, how='left')
+
+        logger.info(f"Feature engineering complete. Shape before cleaning: {df_features.shape}")
+
+    except Exception as e:
+        logger.error(f"Error during feature engineering in API: {e}")
         logger.error(traceback.format_exc())
         return None
+
+    # --- 4. Data Cleaning (Handle inf/NaN using loaded medians) ---
+    df = df_features # Use df from now on
+
+    # Check for required features *before* extensive cleaning
+    missing_model_features = set(required_features) - set(df.columns)
+    if missing_model_features:
+        logger.error(f"Data is missing features required by the model: {missing_model_features}")
+        # Attempt to fill with median if available, otherwise fail
+        can_continue = True
+        for col in missing_model_features:
+            if col in lstm_feature_medians:
+                 logger.warning(f"Filling missing required feature '{col}' with its median value.")
+                 df[col] = lstm_feature_medians[col]
+            else:
+                 logger.error(f"Cannot proceed: Missing required feature '{col}' and no median available.")
+                 can_continue = False
+        if not can_continue:
+             return None
+
+    # Select only the features the model needs + necessary columns like 'close'
+    # Determine the actual price column name present in the data
+    price_column_actual = None
+    price_col_candidates = ['close', 'Close'] # Check lowercase first
+    for pc in price_col_candidates:
+        if pc in df.columns:
+            price_column_actual = pc
+            break
+
+    cols_to_keep = list(required_features) # Start with model features
+    if price_column_actual and price_column_actual not in cols_to_keep:
+        cols_to_keep.append(price_column_actual) # Ensure price column is kept
+
+    # Check if all cols_to_keep actually exist in df.columns before filtering
+    existent_cols_to_keep = [col for col in cols_to_keep if col in df.columns]
+    missing_cols_in_df = set(cols_to_keep) - set(existent_cols_to_keep)
+    if missing_cols_in_df:
+        logger.warning(f"Columns specified to keep but not found in DataFrame: {missing_cols_in_df}")
+
+    if not existent_cols_to_keep:
+         logger.error("No required columns found in the dataframe after feature engineering.")
+         return None
+
+    df = df[existent_cols_to_keep].copy() # Work with only necessary, existing columns
+    logger.info(f"Filtered DataFrame to required features + price. Shape: {df.shape}, Columns: {df.columns.tolist()}")
+
+
+    # Handle infinities first (within required features)
+    for col in required_features:
+         # Check if column exists before processing
+         if col in df.columns and df[col].isin([np.inf, -np.inf]).any():
+              inf_count = df[col].isin([np.inf, -np.inf]).sum()
+              logger.warning(f"Feature '{col}' contains {inf_count} inf values. Replacing with NaN.")
+              df[col] = df[col].replace([np.inf, -np.inf], np.nan)
+
+    # Handle NaNs using preloaded medians (from training)
+    if not lstm_feature_medians:
+         logger.warning("Feature medians not loaded. Cannot impute NaNs accurately. Dropping rows with NaNs as fallback.")
+         df.dropna(subset=required_features, inplace=True)
+    else:
+         features_to_check_nan = [f for f in required_features if f in df.columns] # Only check existing columns
+         for col in features_to_check_nan:
+              if df[col].isna().any():
+                   nan_count = df[col].isna().sum()
+                   if col in lstm_feature_medians:
+                       median_val = lstm_feature_medians[col]
+                       # Ensure median_val is a compatible type (float/int)
+                       if pd.api.types.is_numeric_dtype(df[col].dtype):
+                            try:
+                                median_val = float(median_val) # Convert just in case
+                                logger.warning(f"Feature '{col}' contains {nan_count} NaNs. Filling with PRELOADED median ({median_val:.4f}).")
+                                df[col].fillna(median_val, inplace=True)
+                            except (ValueError, TypeError) as fill_err:
+                                logger.error(f"Could not fill NaNs for '{col}' with median {median_val}: {fill_err}. Dropping rows.")
+                                df.dropna(subset=[col], inplace=True)
+                       else:
+                            logger.warning(f"Feature '{col}' is not numeric, skipping NaN fill with median.")
+
+                   else:
+                       # Fallback if median for this specific feature wasn't loaded
+                       logger.error(f"Feature '{col}' contains {nan_count} NaNs, BUT median not preloaded! Dropping rows.")
+                       df.dropna(subset=[col], inplace=True) # Drop rows missing this essential median
+
+    # Final check for NaNs after imputation
+    final_features_to_check = [f for f in required_features if f in df.columns]
+    if final_features_to_check:
+        remaining_nans = df[final_features_to_check].isna().sum().sum()
+        if remaining_nans > 0:
+             logger.error(f"{remaining_nans} NaNs remain in required features after imputation. Prediction might fail or be inaccurate.")
+             # Optional: Fill remaining with 0?
+             # df[final_features_to_check] = df[final_features_to_check].fillna(0)
+             # For now, just log and continue, model might handle it or fail.
+
+    # Ensure we have enough data for the sequence
+    if len(df) < seq_length:
+        logger.error(f"Insufficient data ({len(df)} rows) after processing for sequence length {seq_length}.")
+        return None
+
+    logger.info(f"Data loaded and prepared successfully. Final shape for scaling: {df.shape}")
+    return df # Return the unscaled features DataFrame
 
 # --- LSTM Model Definition ---
 def build_seq2seq_model(input_shape, horizon_keys=['1d', '3d', '7d']):

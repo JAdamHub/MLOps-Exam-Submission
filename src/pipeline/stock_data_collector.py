@@ -36,15 +36,6 @@ STOCK_SYMBOL = "VWSB.DEX"  # vestas wind systems ticker on frankfurt stock excha
 
 OUTPUT_SIZE = "full"  # to get as much historical data as possible (up to 20 years)
 
-# Data files
-TARGET_DAILY_FILENAME = "vestas_daily.csv"  # generic filename not tied to specific symbol
-TARGET_WEEKLY_FILENAME = "vestas_weekly.csv"
-TARGET_MONTHLY_FILENAME = "vestas_monthly.csv"
-TARGET_TRADING_DAYS_FILENAME = "vestas_trading_days.csv"
-
-# Macroeconomic data files
-MACRO_DAILY_FILENAME = "macro_economic_trading_days.csv"
-
 # Macroeconomic indicators from Alpha Vantage - updated symbols
 MACRO_INDICATORS = {
     # Market indices - Updated symbols

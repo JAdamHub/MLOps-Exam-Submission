@@ -105,8 +105,9 @@ def main():
         
         # Run pipeline first
         logger.info("Starting initial pipeline run...")
-        from pipeline.pipeline_start import main as run_pipeline
-        run_pipeline()
+        # from pipeline.pipeline_start import main as run_pipeline
+        # run_pipeline() # Commented out to skip initial pipeline run
+        logger.info("Skipping initial pipeline run as requested.")
         
         # Start API in a separate process
         start_api_server()
