@@ -68,9 +68,7 @@ The core pipeline now operates as follows:
 ├── docker-compose.yml      # Docker service definitions
 ├── requirements.txt        # Python dependencies 📄
 ├── data/                   # Datasets 📁
-│   └── raw/
-│       └── stocks/
-│           └── market_data.db # Primary data store 💾
+│   └── market_data.db      # Primary data store 💾
 ├── docker/                 # Docker helper scripts 🐳
 │   ├── healthcheck.sh
 │   └── run.sh

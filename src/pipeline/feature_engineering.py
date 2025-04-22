@@ -15,11 +15,6 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PROCESSED_FEATURES_DIR = PROJECT_ROOT / "data" / "features" # Keep for potential future use or debugging output
 MODELS_DIR = PROJECT_ROOT / "models"
 
-# input file from preprocessing step
-# INPUT_FILENAME = "vestas_macro_preprocessed_trading_days.csv"
-# output file
-# OUTPUT_FILENAME = "vestas_features_trading_days.csv"
-
 # feature engineering parameters
 PRICE_COLUMN = 'close'  # stock price typically uses "close" as the primary price column
 VOLUME_COLUMN = 'volume'  # volume column for stocks
@@ -27,22 +22,6 @@ LAG_PERIODS = [1, 3, 7]  # lag periods in days
 SMA_WINDOWS = [7, 30]  # simple moving average windows in days
 VOLATILITY_WINDOW = 14  # window for rolling standard deviation (volatility)
 FORECAST_HORIZONS = [1, 3, 7]  # predict the price 1, 3, and 7 days ahead
-
-# ensure output directory exists
-# PROCESSED_FEATURES_DIR.mkdir(parents=True, exist_ok=True)
-
-# INPUT_FILE_PATH = INTERMEDIATE_PREPROCESSED_DIR / INPUT_FILENAME
-# OUTPUT_FILE_PATH = PROCESSED_FEATURES_DIR / OUTPUT_FILENAME
-
-# def load_data(filepath: Path) -> pd.DataFrame | None:
-#     """load preprocessed data."""
-#     try:
-#         df = pd.read_csv(filepath, index_col=0, parse_dates=True)
-#         logging.info(f"processed data loaded successfully from {filepath}")
-#         return df
-#     except Exception as e:
-#         logging.error(f"error loading processed data: {e}")
-#         return None
 
 def create_features(df: pd.DataFrame) -> pd.DataFrame | None:
     """generates features for the stock price model."""
@@ -245,7 +224,7 @@ def create_features(df: pd.DataFrame) -> pd.DataFrame | None:
             absolute_target_columns.append(target_col_name)
             logging.debug(f"created absolute target feature: {target_col_name}")
 
-        # ---> ADDED: Convert absolute targets to percentage change <---
+        # Convert absolute targets to percentage change
         # This transformation is done here instead of in the training script
         percent_target_columns = []
         for target_col in absolute_target_columns:
@@ -258,7 +237,6 @@ def create_features(df: pd.DataFrame) -> pd.DataFrame | None:
             ) * 100
             percent_target_columns.append(pct_target_col_name)
             logging.info(f"Converted {target_col} to percent change target: {pct_target_col_name}")
-        # ---> END ADDED <---
 
         # IMPORTANT: Do NOT handle NaNs here anymore. 
         # NaN handling (filling) will happen in the training script after splitting data
@@ -509,16 +487,4 @@ def main(df_preprocessed: pd.DataFrame):
 if __name__ == "__main__":
     # Add placeholder logic for running standalone if needed, e.g., load from DB
     logging.warning("This script is intended to be run as part of the pipeline.")
-    # Example: Load preprocessed data manually if needed for testing
-    # project_root = Path(__file__).resolve().parents[2]
-    # db_file = project_root / "data" / "raw" / "market_data.db"
-    # from preprocessing import load_data as load_preprocessed_data # Use the db loader
-    # df_preprocessed = load_preprocessed_data(db_file, "market_data")
-    # if df_preprocessed is not None:
-    #     result_df = main(df_preprocessed)
-    #     if result_df is None:
-    #         sys.exit(1)
-    # else:
-    #     logging.error("Could not load preprocessed data for standalone run.")
-    #     sys.exit(1)
     sys.exit(0) # Indicate success if run standalone without error (though not typical use)

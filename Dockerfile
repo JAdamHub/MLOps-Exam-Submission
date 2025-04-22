@@ -20,10 +20,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY . /app/
 
 # ensure necessary directories exist
-RUN mkdir -p /app/data/raw/stocks \
-    /app/data/raw/macro \
-    /app/data/intermediate/combined \
-    /app/data/intermediate/preprocessed \
+RUN mkdir -p /app/data \
     /app/data/features \
     /app/models \
     /app/reports \

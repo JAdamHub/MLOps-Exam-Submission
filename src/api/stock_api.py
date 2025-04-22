@@ -57,15 +57,9 @@ logger = logging.getLogger("vestas-api")
 BASE_DIR = Path(__file__).resolve().parents[2]
 MODELS_DIR = BASE_DIR / "models"
 DATA_DIR = BASE_DIR / "data"
-RAW_DATA_DIR = DATA_DIR / "raw"
-DB_FILE = RAW_DATA_DIR / "stocks" / "market_data.db"
+DB_FILE = DATA_DIR / "market_data.db" # Corrected path
 DB_TABLE_NAME = "market_data"
 
-# Data paths
-# VESTAS_DATA_FILE = DATA_DIR / "raw" / "stocks" / "vestas_macro_combined_trading_days.csv"  # Changed to combined file
-VESTAS_DAILY_DATA_FILE = DATA_DIR / "raw" / "stocks" / "vestas_daily.csv"  # Alternative file for price history endpoint only
-# Define the primary feature file path used for training and prediction
-# PROCESSED_FEATURES_FILE = DATA_DIR / "features" / "vestas_features_trading_days.csv" # No longer primary source for API
 
 # LSTM model paths
 LSTM_MODEL_PATH = MODELS_DIR / "lstm_model_checkpoint.keras"
@@ -774,8 +768,6 @@ def load_and_prepare_latest_data(required_features: List[str], seq_length: int):
         remaining_nans = df[final_features_to_check].isna().sum().sum()
         if remaining_nans > 0:
              logger.error(f"{remaining_nans} NaNs remain in required features after imputation. Prediction might fail or be inaccurate.")
-             # Optional: Fill remaining with 0?
-             # df[final_features_to_check] = df[final_features_to_check].fillna(0)
              # For now, just log and continue, model might handle it or fail.
 
     # Ensure we have enough data for the sequence

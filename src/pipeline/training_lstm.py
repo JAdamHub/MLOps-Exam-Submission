@@ -26,7 +26,6 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 # --- Configuration ---
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-PROCESSED_FEATURES_DIR = PROJECT_ROOT / "data" / "features"
 MODELS_DIR = PROJECT_ROOT / "models"
 FIGURES_DIR = MODELS_DIR / "figures"
 
@@ -363,10 +362,6 @@ def main(df_features: pd.DataFrame):
     tf.random.set_seed(42)
     
     try:
-        # Load and prepare data
-        # logging.info("Loading data...")
-        # features_file = PROCESSED_FEATURES_DIR / "vestas_features_trading_days.csv"
-        # df = pd.read_csv(features_file)
         if df_features is None or df_features.empty:
             logging.error("Halting training: No feature data received.")
             return False
@@ -388,6 +383,9 @@ def main(df_features: pd.DataFrame):
         
         logging.info(f"Using the following target columns: {target_columns}")
         
+        # Select features (all columns except target columns)
+        feature_columns = [col for col in df.columns if col not in target_columns]
+        
         # Handle infinite values and extreme numbers
         for col in target_columns:
             # Replace inf and -inf with NaN
@@ -400,20 +398,25 @@ def main(df_features: pd.DataFrame):
             # df_val[col] = df_val[col].fillna(median_val)
             # df_test[col] = df_test[col].fillna(median_val)
         
-        # Ensure no NaNs remain after inf handling (should ideally be cleaned in feature eng.)
-        if df[col].isna().any():
-            logging.error(f"NaNs detected in column '{col}' in training script after inf handling. Data should be cleaned in feature_engineering.py.")
-            # Option: fill with 0 or median as a fallback, but indicates upstream issue
-            # df[col].fillna(0, inplace=True)
-            # return False # Or halt pipeline
-        
-        # Log columns with extreme values
-        min_val = df[col].min()
-        max_val = df[col].max()
-        if max_val > 1e10 or min_val < -1e10:
-            logging.warning(f"Feature {col} has extreme values: min={min_val}, max={max_val}")
-            # Limit extreme values
-            df[col] = df[col].clip(-1e10, 1e10)
+        # --- NaN & Extreme Value Check (after feature engineering) ---
+        # Feature engineering should have dropped NaNs, but we check targets and features again.
+        cols_to_check = target_columns + feature_columns
+        for col in cols_to_check:
+            if col in df.columns:
+                 # Check for NaNs that shouldn't be here
+                 if df[col].isna().any():
+                     logging.error(f"NaNs detected in column '{col}' at the start of training script. Data should be cleaned in feature_engineering.py. Halting.")
+                     return False # Halt pipeline
+                 
+                 # Check and clip extreme values
+                 if pd.api.types.is_numeric_dtype(df[col]):
+                     min_val = df[col].min()
+                     max_val = df[col].max()
+                     if max_val > 1e10 or min_val < -1e10:
+                         logging.warning(f"Column {col} has extreme values before split: min={min_val}, max={max_val}. Clipping.")
+                         df[col] = df[col].clip(-1e10, 1e10)
+            else:
+                 logging.warning(f"Column {col} expected but not found in DataFrame at start of training.")
 
         # Check if data is empty after dropping NaNs
         if df.empty:
@@ -439,9 +442,6 @@ def main(df_features: pd.DataFrame):
         logging.info(f"Training set size: {len(df_train)}")
         logging.info(f"Validation set size: {len(df_val)}")
         logging.info(f"Test set size: {len(df_test)}")
-        
-        # Select features (all columns except target columns)
-        feature_columns = [col for col in df.columns if col not in target_columns]
         
         # Remove non-numeric columns from feature_columns
         numeric_feature_columns = []

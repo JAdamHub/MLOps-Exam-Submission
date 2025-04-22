@@ -9,15 +9,12 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 # determine project root based on script location
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-RAW_DATA_DIR = PROJECT_ROOT / "data" / "raw"
-INTERMEDIATE_PREPROCESSED_DIR = PROJECT_ROOT / "data" / "intermediate" / "preprocessed"
+DATA_DIR = PROJECT_ROOT / "data" # Point directly to data directory
+# INTERMEDIATE_PREPROCESSED_DIR = PROJECT_ROOT / "data" / "intermediate" / "preprocessed"
 
 # Database file from the collection step
-DB_FILE = RAW_DATA_DIR / "stocks" / "market_data.db"
+DB_FILE = DATA_DIR / "market_data.db" # Corrected path to DB in data/
 TABLE_NAME = "market_data"
-
-# ensure output directories exist
-# INTERMEDIATE_PREPROCESSED_DIR.mkdir(parents=True, exist_ok=True)
 
 def load_data(db_path: Path, table: str) -> pd.DataFrame | None:
     """Loads combined data from the SQLite database."""
@@ -134,13 +131,6 @@ def main():
         logging.error("halting preprocessing due to basic processing error.")
         return None # Return None on error
 
-    # save processed data to intermediate file (still needed for feature engineering step)
-    # if save_processed_data(processed_df, OUTPUT_FILE_PATH):
-    #     logging.info("--- basic data preprocessing step completed successfully --- ")
-    #     return True # indicate success
-    # else:
-    #     logging.error("--- basic data preprocessing step failed during save ---\")
-    #     return False # Indicate failure
     logging.info("--- basic data preprocessing step completed successfully --- ")
     return processed_df # Return the DataFrame
 

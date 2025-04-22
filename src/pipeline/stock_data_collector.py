@@ -17,11 +17,12 @@ import sqlite3
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # --- Configuration ---
+START_DATE = "2006-04-08" # Define the desired start date
 # Determine project root based on script location
 # Assumes the script is in src/pipeline
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-RAW_STOCKS_DIR = PROJECT_ROOT / "data" / "raw" / "stocks"
-DB_FILE = RAW_STOCKS_DIR / "market_data.db" # Database file path
+DATA_DIR = PROJECT_ROOT / "data" # Point directly to data directory
+DB_FILE = DATA_DIR / "market_data.db" # Database file path in data/
 
 # Load environment variables
 load_dotenv(PROJECT_ROOT / ".env")
@@ -58,7 +59,7 @@ RETRY_DELAY = 15  # seconds, increased to avoid API rate limits
 MAX_DELAY = 60  # max seconds to wait in case of rate limiting
 
 # Ensure data directories exist
-RAW_STOCKS_DIR.mkdir(parents=True, exist_ok=True)
+DATA_DIR.mkdir(parents=True, exist_ok=True) # Ensure the main data directory exists
 
 def get_trading_days(start_date, end_date):
     """
@@ -235,6 +236,14 @@ def process_stock_data(data, time_series_key):
         # Sort by date
         df.sort_index(inplace=True)
         
+        # Filter data from START_DATE onwards
+        try:
+             start_datetime = pd.to_datetime(START_DATE)
+             df = df[df.index >= start_datetime]
+             logging.info(f"Filtered stock data to start from {START_DATE}. New shape: {df.shape}")
+        except ValueError:
+             logging.error(f"Invalid START_DATE format: {START_DATE}. Skipping date filtering.")
+
         return df
         
     except Exception as e:
@@ -289,6 +298,14 @@ def process_fx_data(data):
         # Sort by date
         df.sort_index(inplace=True)
         
+        # Filter data from START_DATE onwards
+        try:
+             start_datetime = pd.to_datetime(START_DATE)
+             df = df[df.index >= start_datetime]
+             logging.info(f"Filtered FX data to start from {START_DATE}. New shape: {df.shape}")
+        except ValueError:
+             logging.error(f"Invalid START_DATE format: {START_DATE}. Skipping date filtering.")
+
         return df
         
     except Exception as e:
