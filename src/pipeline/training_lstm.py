@@ -390,13 +390,6 @@ def main(df_features: pd.DataFrame):
         for col in target_columns:
             # Replace inf and -inf with NaN
             df[col] = df[col].replace([np.inf, -np.inf], np.nan)
-            # We will handle NaNs globally next
-            
-            # Limit extreme values - Do this *after* handling NaNs
-            # median_val = df_train[col].median()
-            # df_train[col] = df_train[col].fillna(median_val)
-            # df_val[col] = df_val[col].fillna(median_val)
-            # df_test[col] = df_test[col].fillna(median_val)
         
         # --- NaN & Extreme Value Check (after feature engineering) ---
         # Feature engineering should have dropped NaNs, but we check targets and features again.
@@ -572,15 +565,5 @@ def main(df_features: pd.DataFrame):
         return False
 
 if __name__ == "__main__":
-    # Add placeholder logic for running standalone if needed
     logging.warning("This script is intended to be run as part of the pipeline.")
-    # Example: Load features data manually if needed for testing
-    # project_root = Path(__file__).resolve().parents[2]
-    # features_file = project_root / "data" / "features" / "vestas_features_trading_days.csv"
-    # if features_file.exists():
-    #     df_features = pd.read_csv(features_file)
-    #     main(df_features)
-    # else:
-    #     logging.error("Feature file not found for standalone run.")
-    #     sys.exit(1)
     sys.exit(0) # Indicate success if run standalone without error
