@@ -1,204 +1,230 @@
-# **Note:** The `docker` branch is used for building the Docker image via GitHub Actions. 🧪
+# 📈 Vestas Stock Price Prediction MLOps Pipeline V2.0 🚀
 
-# 📈 Vestas Stock Price Prediction MLOps Pipeline 🚀
+Welcome to Version 2.0 of the MLOps pipeline for predicting Vestas (VWSB.DEX) stock prices! This project demonstrates a complete machine learning operations workflow, leveraging historical market data, macroeconomic indicators, and an LSTM deep learning model to forecast future stock prices across multiple time horizons (1, 3, and 7 days).
 
-A comprehensive MLOps pipeline for predicting Vestas stock prices using historical market data and macroeconomic indicators. The system leverages LSTM deep learning models to forecast stock prices at multiple time horizons (1, 3, and 7 days ahead).
+## ✨ V2.0 Highlights
 
-## 🔍 Project Overview
+*   **Database-Centric:** Pipeline steps now primarily use an SQLite database (`market_data.db`) for data persistence, reducing reliance on intermediate CSV files.
+*   **In-Memory Data Transfer:** Preprocessing, Feature Engineering, and Training steps pass DataFrames directly in memory for improved efficiency.
+*   **Refined API Data Loading:** The prediction API now sources its data directly from the database and performs necessary feature engineering, ensuring consistency with the latest pipeline run.
+*   **Code Simplification:** Removed unused functions and redundant code, particularly in the training script.
 
-This project demonstrates a complete machine learning operations (MLOps) pipeline for stock price prediction:
-- Data collection from Alpha Vantage API for stock and macroeconomic data
-- Data preprocessing and feature engineering
-- Model training using LSTM neural networks
-- API endpoints for predictions and visualizations
-- Streamlit dashboard for interactive analysis
-- Containerization with Docker for easy deployment
-- Daily pipeline retraining for up-to-date models
+## 🌟 Key Features
+
+*   **Data Collection:** Fetches Vestas stock data and relevant macroeconomic indicators (ETFs, FX rates) from Alpha Vantage API. ↔️
+*   **Data Storage:** Persists collected data in an SQLite database. 💾
+*   **Preprocessing:** Cleans and prepares the data. ✨
+*   **Feature Engineering:** Generates a rich set of technical indicators and time-based features. ⚙️
+*   **LSTM Model Training:** Trains a Sequence-to-Sequence LSTM model for multi-horizon price prediction. 🧠
+*   **API Server:** Provides RESTful endpoints (built with FastAPI) to serve price history and predictions. 🌐
+*   **Interactive Dashboard:** Visualizes historical data and model predictions using Streamlit. 📊
+*   **Containerization:** Uses Docker and Docker Compose for easy setup and deployment. 🐳
+*   **Scheduled Retraining:** Automatically retrains the model daily with fresh data. ⏰
+
+## 🔄 Pipeline Overview V2.0
+
+The core pipeline now operates as follows:
+
+```text
+                                                       (Scheduled Daily @ 08:30)
+                                                                  |
+                                                                  v
+[Alpha Vantage API] ---> (1. Data Collection) ---> [data/raw/stocks/market_data.db]
+                                                                  |
+                               +----------------------------------+
+                               |
+                               v
+[market_data.db] ---> (2. Preprocessing) ---------> [DataFrame (Memory)]
+                                                                  |
+                                                                  v
+[DataFrame (Memory)] --> (3. Feature Engineering) --> [DataFrame (Memory)]
+                                                                  |
+                                                                  v
+[DataFrame (Memory)] --> (4. LSTM Training) --------> [models/* artifacts]
+                                                                  |
+                                                                  v
+[models/* artifacts] & [market_data.db] ---> (5. API & Streamlit Startup) ---> [User via Browser]
+
+```
+
+**Explanation:**
+
+1.  **Data Collection:** Fetches data from Alpha Vantage and stores the combined raw/preprocessed data in `market_data.db`.
+2.  **Preprocessing:** Loads data from the database, performs initial cleaning, and returns a DataFrame.
+3.  **Feature Engineering:** Takes the preprocessed DataFrame, calculates numerous features, cleans NaNs, and returns the feature-rich DataFrame.
+4.  **LSTM Training:** Takes the features DataFrame, trains the Seq2Seq LSTM model, and saves the model (`.keras`) and supporting artifacts (`.joblib` scalers, feature names, etc.) to the `models/` directory.
+5.  **API & Streamlit:** The FastAPI server and Streamlit dashboard are started. The API loads the necessary model artifacts from `models/`. For predictions or historical data display, it queries the `market_data.db` and performs necessary processing (like feature engineering for predictions).
+6.  **Scheduling:** The entire pipeline (Steps 1-4) is scheduled to run daily to retrain the model. The API server is restarted after a successful pipeline run to load the new model.
 
 ## 📁 Project Structure
 
 ```text
 .
-├── .env                    # Environment variables (API key) 🔑 NEEDS TO BE CREATED WITH YOUR ALPHA VANTAGE API KEY
-├── .gitignore              # Specifies intentionally untracked files to ignore
-├── .dockerignore           # Specifies files to ignore when building Docker images
-├── Dockerfile              # Instructions to build the Docker image
-├── README.md               # Project overview, setup instructions, etc. 📖
-├── docker-compose.yml      # Defines Docker applications (API, Streamlit)
-├── requirements.txt        # Python package dependencies 📄
-├── data/                   # Contains datasets used in the project 📁
-│   ├── features/           #  Processed features for model training
-│   ├── intermediate/       #  Intermediate data files during processing
-│   │   ├── combined/       #   Combined stock and macro data
-│   │   └── preprocessed/   #   Preprocessed data ready for feature engineering
-│   └── raw/                #  Raw, original data files
-│       ├── stocks/         #   Raw stock price data
-│       └── macro/          #   Raw macroeconomic data
-├── docker/                 # Docker-related configuration files 🐳
-│   ├── healthcheck.sh      #  Script to check API health within containers
-│   └── run.sh              #  Helper script to build and run Docker containers
-├── models/                 # Trained models and related artifacts 🤖
-│   ├── *.joblib            #  Saved preprocessing objects (scalers, feature names)
-│   └── *.keras             #  Saved Keras model files
-├── plots/                  # Visualizations generated during analysis 📉
-├── reports/                # Generated reports, including model metrics 📊
-├── results/                # Raw evaluation results from model runs 📈
-├── src/                    # Source code for the project 💻
-│   ├── api/                #  FastAPI application code
-│   │   └── stock_api.py    #  API endpoints for stock data and predictions
-│   ├── main.py             #  Main entry point for the application
-│   ├── pipeline/           #  Data processing and model training pipeline
-│   │   ├── combined_data_processor.py      # Combines stock and macro data
-│   │   ├── feature_engineering.py          # Creates features for the model
-│   │   ├── model_results_visualizer.py     # Generates plots from model results
-│   │   ├── pipeline_start.py               # Orchestrates the pipeline execution
-│   │   ├── preprocessing.py                # Data preprocessing
-│   │   ├── stock_data_collector.py         # Fetches data from Alpha Vantage
-│   │   └── training-lstm.py                # Trains the LSTM model
-│   └── streamlit/                          # Streamlit dashboard application
-│       └── app.py          #  Defines the Streamlit dashboard UI and logic
+├── .env                    # Environment variables (API key) 🔑 NEEDS TO BE CREATED
+├── .gitignore              # Files ignored by Git
+├── .dockerignore           # Files ignored by Docker build
+├── Dockerfile              # Docker image build instructions
+├── README.md               # This file! 📖 (V2.0)
+├── docker-compose.yml      # Docker service definitions
+├── requirements.txt        # Python dependencies 📄
+├── data/                   # Datasets 📁
+│   └── raw/
+│       └── stocks/
+│           └── market_data.db # Primary data store 💾
+├── docker/                 # Docker helper scripts 🐳
+│   ├── healthcheck.sh
+│   └── run.sh
+├── models/                 # Trained models and artifacts 🤖
+├── plots/                  # Saved plot images 📉 (e.g., from training)
+├── reports/                # Generated reports 📊 (placeholder)
+├── results/                # Model evaluation metrics 📈
+└── src/                    # Source code 💻
+    ├── api/                # FastAPI application
+    ├── main.py             # Main entry point (starts pipeline, API, Streamlit)
+    ├── pipeline/           # Data processing and model training scripts
+    └── streamlit/          # Streamlit dashboard application
 ```
 
 ## ⚙️ Setup and Installation
 
 ### Prerequisites
-- Python 3.10+ 🐍
-- Docker and Docker Compose (for containerized deployment) 🐳
-- Alpha Vantage API key (get a free key at [Alpha Vantage](https://www.alphavantage.co/support/#api-key))
+*   Python 3.10+ 🐍
+*   Docker and Docker Compose (Recommended for ease of use) 🐳
+*   Alpha Vantage API key (Get a free key: [alpha_vantage.co](https://www.alphavantage.co/support/#api-key))
 
 ### Local Development Setup
 
-1. **Clone the repository:**
-   ```bash
-   git clone https://github.com/JAdamHub/MLOps-Exam-Submission.git
-   cd MLOps-Exam-Submission
-   ```
+1.  **Clone the repository:**
+    ```bash
+    git clone https://github.com/JAdamHub/MLOps-Exam-Submission.git
+    cd MLOps-Exam-Submission
+    ```
 
-2. **Create and activate a virtual environment:**
-   ```bash
-   python -m venv venv
-   source venv/bin/activate  # On Windows use `venv\Scripts\activate`
-   ```
+2.  **Create and activate a virtual environment:**
+    ```bash
+    python -m venv venv
+    source venv/bin/activate  # On Windows: venv\Scripts\activate
+    ```
 
-3. **Install dependencies:**
-   ```bash
-   pip install -r requirements.txt
-   ```
+3.  **Install dependencies:**
+    ```bash
+    pip install -r requirements.txt
+    ```
 
-4. **Create `.env` file with your Alpha Vantage API key:**
-   ```
-   ALPHA_VANTAGE_API_KEY="your_api_key_here"
-   ```
+4.  **Create `.env` file:** Create a file named `.env` in the project root directory and add your Alpha Vantage API key:
+    ```
+    ALPHA_VANTAGE_API_KEY="YOUR_API_KEY_HERE"
+    ```
 
-### Running the Pipeline + API & Streamlit App
+## ▶️ Running the Application
 
-To run the complete data pipeline (collection, preprocessing, feature engineering, and model training):
+### Option 1: Full Pipeline Run & Serve (Recommended for First Time)
+
+This runs the entire data collection and training pipeline first, then starts the API and Streamlit app.
 
 ```bash
 python -m src.main
 ```
 
-This will:
-- Run the initial data pipeline
-- Train a LSTM model
-- Start the FastAPI server on http://localhost:8000
-- Start the Streamlit dashboard on http://localhost:8501
-- Schedule daily pipeline runs at 8:30 AM
+*   The initial pipeline run might take some time (data fetching, training).
+*   API will be available at `http://localhost:8000`.
+*   Streamlit Dashboard will be available at `http://localhost:8501`.
+*   Daily retraining is scheduled for 08:30 AM.
+
+### Option 2: Start API & Streamlit Only (Using Existing Data/Model)
+
+If you have already run the pipeline and have the `market_data.db` and `models/` artifacts, you can skip the initial pipeline run:
+
+1.  **Temporarily edit `src/main.py`:** Comment out the line that calls `run_pipeline()`.
+    ```python
+    # from pipeline.pipeline_start import main as run_pipeline
+    # run_pipeline() # Commented out
+    logger.info("Skipping initial pipeline run.")
+    ```
+2.  **Run the main script:**
+    ```bash
+    python -m src.main
+    ```
+    *Remember to uncomment the lines in `src/main.py` later if you want the full startup behavior.*
 
 ## 🐳 Docker Deployment
 
-### Using the Run Script (Recommended)
+Using Docker is the recommended way for a consistent environment.
 
-The easiest way to start the application is using the provided helper script:
+### Using the Run Script (Easiest)
+
+The helper script handles directory creation and checks:
 
 ```bash
 ./docker/run.sh
 ```
 
-This script will:
-- Create all necessary directories
-- Check for the `.env` file with your API key
-- Start the Docker container
+### Manual Docker Compose
 
-### Manual Docker Setup
+Ensure you have created the `.env` file first.
 
-1. **Build and start using Docker Compose:**
-   ```bash
-   docker-compose up -d
-   ```
+1.  **Build and start services:**
+    ```bash
+    docker-compose up --build -d
+    ```
+    *   `--build`: Forces rebuilding the image if changes were made.
+    *   `-d`: Runs in detached mode (background).
 
-2. **View logs:**
-   ```bash
-   docker-compose logs -f
-   ```
+2.  **View logs:**
+    ```bash
+    docker-compose logs -f
+    ```
 
-3. **Stop the container:**
-   ```bash
-   docker-compose down
-   ```
+3.  **Stop services:**
+    ```bash
+    docker-compose down
+    ```
 
-### Running the Pre-built Image from GHCR
+### Running the Pre-built Image (from GHCR)
 
-If you prefer not to build the image locally, you can pull and run the pre-built image directly from the GitHub Container Registry:
+```bash
+# Make sure to replace YOUR_API_KEY_HERE
+docker run -d --name mlops-app-v2 \\
+  -p 8000:8000 \\
+  -p 8501:8501 \\
+  -e ALPHA_VANTAGE_API_KEY="YOUR_API_KEY_HERE" \\
+  ghcr.io/jadamhub/mlops-exam-submission:latest
+```
 
-1. **Pull the latest image:**
-   ```bash
-   docker pull ghcr.io/jadamhub/mlops-exam-submission:latest
-   ```
-
-2. **Run the container:**
-   Place your `your_api_key_here` with your actual Alpha Vantage API key.
-   ```bash
-   docker run -d --name mlops-app \
-     -p 8000:8000 \
-     -p 8501:8501 \
-     -e ALPHA_VANTAGE_API_KEY="your_api_key_here" \
-     ghcr.io/jadamhub/mlops-exam-submission:latest
-   ```
-   *  `-d` runs the container in detached mode (in the background).
-   *  `--name mlops-app` gives the container a recognizable name.
-   *  `-p 8000:8000` maps your local port 8000 to the container's port 8000 (FastAPI).
-   *  `-p 8501:8501` maps your local port 8501 to the container's port 8501 (Streamlit).
-   *  `-e ALPHA_VANTAGE_API_KEY="..."` sets the required environment variable for the Alpha Vantage API key.
-
-   You can then access the API at `http://localhost:8000` and the Streamlit dashboard at `http://localhost:8501`.
+Access API at `http://localhost:8000` and Streamlit at `http://localhost:8501`.
 
 ## 🌐 API Endpoints
 
-The API provides the following endpoints:
+*   `GET /`: Welcome message.
+*   `GET /health`: Check API health and loaded components status.
+*   `GET /price/history?days={num_days}`: Get historical stock data (default: all available).
+*   `POST /predict/lstm?days_ahead={1|3|7}`: Get LSTM model predictions (default: all horizons).
 
-- **GET /** - Welcome message and API information
-- **GET /health** - Health check for the API
-- **GET /price/history** - Get Vestas stock price history
-  - Parameters: `days` (optional, default=7300) (last 20 years)
-- **POST /predict/lstm** - Predict Vestas stock prices
-  - Parameters: `days_ahead` (optional, values: 1, 3, or 7)
-
-Access the interactive API documentation at http://localhost:8000/docs
+Access interactive API documentation via Swagger UI at `http://localhost:8000/docs`.
 
 ## 📊 Streamlit Dashboard
 
-The Streamlit dashboard provides an interactive interface for:
-- Visualizing historical stock prices
-- Viewing price predictions
-- Analyzing price volatility
-- Examining technical indicators
+An interactive web application for:
+*   Visualizing historical stock prices and volume.
+*   Displaying LSTM model predictions for 1, 3, and 7 days ahead.
+*   Viewing basic volatility metrics.
 
-Access the dashboard at http://localhost:8501
+Access it at `http://localhost:8501`.
 
-## 🔄 Daily Updates
+## 🧠 Model Details
 
-The system automatically runs the pipeline daily at 8:30 AM to:
-- Fetch the latest stock and macroeconomic data
-- Retrain the LSTM model with the latest data
-- Update the API with the new model
+*   **Type:** Sequence-to-Sequence (Seq2Seq) LSTM with Attention.
+*   **Input Features:** Historical OHLCV, technical indicators (SMA, EMA, RSI, MACD, Bollinger Bands, etc.), time-based features, macroeconomic indicators (closing prices of SPY, VGK, EUR/USD, USO, TLT).
+*   **Targets:** Predicts the *price* for 1, 3, and 7 **trading days** ahead.
+*   **Evaluation:** Metrics like RMSE, MAE, R² are calculated during training and saved.
 
-## 🛠️ Model Details
+## 🤔 Future Improvements & Considerations
 
-- **Model Type:** Sequence-to-Sequence LSTM (Long Short-Term Memory)
-- **Input Features:** Price history, technical indicators, macroeconomic data (S&P 500 ETF (SPY), Vanguard FTSE Europe ETF (VGK), EUR/USD exchange rates, and United States Oil Fund (USO) to contextualize market trends
-- **Forecast Horizons:** 1-day, 3-day, and 7-day price predictions
-- **Evaluation Metrics:** RMSE, MAE, R²
+*   **Feature Selection:** The feature engineering step generates many features. A systematic analysis could identify and remove less impactful features to simplify the model.
+*   **Hyperparameter Tuning:** Implement a more robust hyperparameter optimization strategy (e.g., KerasTuner, Optuna) instead of manual testing.
+*   **Error Handling:** Enhance error handling and reporting throughout the pipeline and API.
+*   **Monitoring:** Add more sophisticated monitoring for data drift, model performance degradation, and API health.
+*   **Testing:** Implement unit and integration tests for pipeline components and the API.
 
 ## 📝 License
 
